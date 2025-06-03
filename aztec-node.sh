@@ -1,12 +1,11 @@
 #!/bin/bash
 set -e
 
-# Biến USER hiện tại
 USER=$(whoami)
 
 echo "Step 1: Install Docker"
 curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh
+sudo sh get-docker.sh
 rm get-docker.sh
 
 echo "Step 2: Setup aztec directory and download bin"
@@ -19,7 +18,6 @@ chmod +x /home/$USER/.aztec/bin/aztec
 
 echo "Step 3: Create .env file with user input"
 
-# Tự động lấy IP WAN
 P2P_IP=$(curl -s https://api.ipify.org)
 echo "Detected public WAN IP: $P2P_IP"
 
@@ -29,6 +27,7 @@ read -p "Enter VALIDATOR_PRIVATE_KEY: " VALIDATOR_PRIVATE_KEY
 read -p "Enter COINBASE address: " COINBASE
 
 cat > /home/$USER/.aztec/.env <<EOF
+HOME=/home/$USER
 ETHEREUM_HOSTS=$ETHEREUM_HOSTS
 L1_CONSENSUS_HOST_URLS=$L1_CONSENSUS_HOST_URLS
 VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
@@ -37,10 +36,11 @@ P2P_IP=$P2P_IP
 EOF
 
 echo ".env created at /home/$USER/.aztec/.env"
+echo "Displaying content of .env:"
+cat /home/$USER/.aztec/.env
 
 echo "Step 4: Create systemd service file for aztec"
-
-cat > /etc/systemd/system/aztec.service <<EOF
+sudo tee /etc/systemd/system/aztec.service > /dev/null <<EOF
 [Unit]
 Description=Aztec Validator Node
 After=network.target docker.service
