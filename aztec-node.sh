@@ -15,7 +15,13 @@ else
     echo "Docker installed successfully."
 fi
 
-echo "Step 2: Setting up Aztec directory and downloading binaries"
+echo "Step 2: Setting up Docker permissions"
+# Add user to docker group and apply changes
+sudo usermod -aG docker $USER
+echo "User added to docker group. Applying group changes..."
+newgrp docker
+
+echo "Step 3: Setting up Aztec directory and downloading binaries"
 mkdir -p /home/$USER/.aztec
 if [ -f "/home/$USER/.aztec/bin/aztec" ]; then
     echo "Aztec binary already exists. Skipping download."
@@ -28,10 +34,11 @@ else
     echo "Aztec binaries downloaded successfully."
 fi
 
-echo "Step 3: Creating environment configuration"
+echo "Step 4: Creating environment configuration"
 # Auto-detect public IP
 P2P_IP=$(curl -s https://api.ipify.org)
 echo "Detected public IP: $P2P_IP"
+
 read -p "Enter ETHEREUM_HOSTS (comma-separated URLs): " ETHEREUM_HOSTS
 read -p "Enter L1_CONSENSUS_HOST_URLS (comma-separated URLs): " L1_CONSENSUS_HOST_URLS
 read -p "Enter VALIDATOR_PRIVATE_KEY: " VALIDATOR_PRIVATE_KEY
@@ -44,9 +51,10 @@ VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
 COINBASE=$COINBASE
 P2P_IP=$P2P_IP
 EOF
+
 echo "Environment file created at /home/$USER/.aztec/.env"
 
-echo "Step 4: Creating systemd service"
+echo "Step 5: Creating systemd service"
 # Check if service exists and stop/remove it
 if systemctl list-units --full -all | grep -Fq "aztec.service"; then
     echo "Existing Aztec service found. Stopping and removing..."
@@ -88,8 +96,8 @@ echo "Configuring and starting service"
 sudo systemctl daemon-reload
 sudo systemctl enable aztec.service
 sudo systemctl start aztec.service
-echo "Service started successfully."
 
+echo "Service started successfully."
 echo
 echo "IMPORTANT - Firewall Configuration Required:"
 echo "Open these TCP ports in your firewall and router:"
@@ -103,3 +111,6 @@ echo
 echo "If behind NAT, forward these ports to: $P2P_IP"
 echo
 echo "Setup complete!"
+echo
+echo "Note: If this is a fresh Docker installation, you may need to log out and back in"
+echo "for the docker group changes to take full effect in new shell sessions."
