@@ -24,7 +24,7 @@ echo "Detected public WAN IP: $P2P_IP"
 read -p "Enter ETHEREUM_HOSTS (comma separated URLs): " ETHEREUM_HOSTS
 read -p "Enter L1_CONSENSUS_HOST_URLS (comma separated URLs): " L1_CONSENSUS_HOST_URLS
 read -p "Enter VALIDATOR_PRIVATE_KEY: " VALIDATOR_PRIVATE_KEY
-read -p "Enter COINBASE address: " COINBASE
+read -p "Enter VALIDATOR address: " COINBASE
 
 cat > /home/$USER/.aztec/.env <<EOF
 HOME=/home/$USER
