@@ -17,7 +17,6 @@ fi
 
 echo "Step 2: Setting up Aztec directory and downloading binaries"
 mkdir -p /home/$USER/.aztec
-
 if [ -f "/home/$USER/.aztec/bin/aztec" ]; then
     echo "Aztec binary already exists. Skipping download."
 else
@@ -30,11 +29,9 @@ else
 fi
 
 echo "Step 3: Creating environment configuration"
-
 # Auto-detect public IP
 P2P_IP=$(curl -s https://api.ipify.org)
 echo "Detected public IP: $P2P_IP"
-
 read -p "Enter ETHEREUM_HOSTS (comma-separated URLs): " ETHEREUM_HOSTS
 read -p "Enter L1_CONSENSUS_HOST_URLS (comma-separated URLs): " L1_CONSENSUS_HOST_URLS
 read -p "Enter VALIDATOR_PRIVATE_KEY: " VALIDATOR_PRIVATE_KEY
@@ -47,11 +44,9 @@ VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
 COINBASE=$COINBASE
 P2P_IP=$P2P_IP
 EOF
-
 echo "Environment file created at /home/$USER/.aztec/.env"
 
 echo "Step 4: Creating systemd service"
-
 # Check if service exists and stop/remove it
 if systemctl list-units --full -all | grep -Fq "aztec.service"; then
     echo "Existing Aztec service found. Stopping and removing..."
@@ -59,7 +54,8 @@ if systemctl list-units --full -all | grep -Fq "aztec.service"; then
     sudo systemctl disable aztec.service 2>/dev/null || true
 fi
 
-sudo cat > /etc/systemd/system/aztec.service <<EOF
+# Create the service file using a temporary file approach
+sudo tee /etc/systemd/system/aztec.service > /dev/null <<EOF
 [Unit]
 Description=Aztec Validator Node
 After=network.target docker.service
@@ -92,7 +88,6 @@ echo "Configuring and starting service"
 sudo systemctl daemon-reload
 sudo systemctl enable aztec.service
 sudo systemctl start aztec.service
-
 echo "Service started successfully."
 
 echo
