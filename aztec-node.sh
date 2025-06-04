@@ -108,7 +108,7 @@ if [ -z "$REENTERED" ]; then
     # Create docker group if not exists
     if ! getent group docker > /dev/null 2>&1; then
         log_info "Creating docker group..."
-        sudo groupadd docker
+        newgrp docker
         log_success "Docker group created"
     else
         log_success "Docker group already exists"
@@ -325,7 +325,6 @@ Requires=docker.service
 [Service]
 Type=simple
 User=$USER
-Group=$USER
 WorkingDirectory=$AZTEC_DIR
 EnvironmentFile=$ENV_FILE
 ExecStart=$AZTEC_DIR/bin/aztec start --node --archiver --sequencer \\
@@ -339,22 +338,6 @@ ExecStart=$AZTEC_DIR/bin/aztec start --node --archiver --sequencer \\
   --port 8081
 Restart=always
 RestartSec=10
-StartLimitInterval=0
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
-
-# Security settings
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$AZTEC_DIR
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=aztec-validator
 
 [Install]
 WantedBy=multi-user.target
