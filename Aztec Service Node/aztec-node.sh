@@ -285,7 +285,6 @@ User=root
 WorkingDirectory=$PROJECT_PATH
 EnvironmentFile=$ENV_FILE
 Environment=HOME=/root
-Environment=PATH=/root/.aztec/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 ExecStart=/root/.aztec/bin/aztec start \\
     --node \\
@@ -300,18 +299,6 @@ ExecStart=/root/.aztec/bin/aztec start \\
 
 Restart=always
 RestartSec=10
-KillMode=mixed
-TimeoutStopSec=30
-
-# Resource limits
-LimitNOFILE=65535
-LimitNPROC=4096
-
-# Security settings
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$PROJECT_PATH
 
 [Install]
 WantedBy=multi-user.target
