@@ -1,43 +1,79 @@
 #!/bin/bash
-set -e
 
-# Colors for output
+# Aztec Node Setup Script with Environment Configuration
+# Description: Complete setup script for Aztec blockchain node with .env support
+# Author: System Administrator
+# Date: $(date)
+
+set -e  # Exit on any error
+
+# Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Logging functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+# Logging function
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
 }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+error() {
+    echo -e "${RED}[ERROR] $1${NC}"
+    exit 1
 }
 
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+warning() {
+    echo -e "${YELLOW}[WARNING] $1${NC}"
 }
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+info() {
+    echo -e "${BLUE}[INFO] $1${NC}"
 }
 
-# Error handling
-cleanup() {
-    if [ -f "/tmp/get-docker.sh" ]; then
-        rm -f /tmp/get-docker.sh
+# Function to get public IP automatically
+get_public_ip() {
+    local ip=""
+    local services=("ifconfig.me" "ipecho.net/plain" "icanhazip.com" "ident.me")
+    
+    for service in "${services[@]}"; do
+        ip=$(curl -s --connect-timeout 5 "$service" 2>/dev/null | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' | head -1)
+        if [[ -n "$ip" ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    
+    # Fallback method using hostname
+    ip=$(hostname -I | awk '{print $1}' 2>/dev/null)
+    if [[ -n "$ip" ]]; then
+        echo "$ip"
+        return 0
     fi
-    if [ -f "/tmp/bin.tar.gz" ]; then
-        rm -f /tmp/bin.tar.gz
-    fi
+    
+    error "Could not determine public IP address"
 }
 
-trap cleanup EXIT
+# Function to validate Ethereum address
+validate_eth_address() {
+    local address="$1"
+    if [[ ! "$address" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+        return 1
+    fi
+    return 0
+}
 
-# Validation functions
+# Function to validate private key
+validate_private_key() {
+    local key="$1"
+    if [[ ! "$key" =~ ^0x[a-fA-F0-9]{64}$ ]]; then
+        return 1
+    fi
+    return 0
+}
+
+# Function to validate URL
 validate_url() {
     local url="$1"
     if [[ ! "$url" =~ ^https?:// ]]; then
@@ -46,457 +82,313 @@ validate_url() {
     return 0
 }
 
-validate_ethereum_address() {
-    local address="$1"
-    if [[ ! "$address" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
-        return 1
-    fi
-    return 0
+# Function to read hidden input (for private key)
+read_hidden() {
+    local prompt="$1"
+    local input=""
+    echo -n "$prompt"
+    while IFS= read -r -s -n1 char; do
+        if [[ $char == $'\0' ]]; then
+            break
+        elif [[ $char == $'\177' ]]; then  # Backspace
+            if [[ ${#input} -gt 0 ]]; then
+                input="${input%?}"
+                echo -ne '\b \b'
+            fi
+        else
+            input+="$char"
+            echo -n "*"
+        fi
+    done
+    echo
+    echo "$input"
 }
 
-validate_private_key() {
-    local key="$1"
-    # Remove 0x prefix if present
-    key="${key#0x}"
-    if [[ ! "$key" =~ ^[a-fA-F0-9]{64}$ ]]; then
-        return 1
-    fi
-    return 0
-}
-
-# Check system requirements
-check_system_requirements() {
-    log_info "Checking system requirements..."
+# Function to create .env file with user input
+create_env_file() {
+    local env_file="$HOME/.aztec/.env"
     
-    # Check OS
-    if [[ ! -f /etc/os-release ]]; then
-        log_error "Cannot determine OS. This script requires Linux."
-        exit 1
-    fi
+    log "Creating environment configuration..."
     
-    # Check available disk space (minimum 50GB)
-    available_space=$(df / | awk 'NR==2 {print $4}')
-    if [ "$available_space" -lt 52428800 ]; then  # 50GB in KB
-        log_warning "Low disk space detected. Recommended: 50GB+ available"
-    fi
+    # Create .aztec directory if it doesn't exist
+    mkdir -p "$HOME/.aztec"
     
-    # Check RAM (minimum 8GB)
-    total_ram=$(free -m | awk 'NR==2{print $2}')
-    if [ "$total_ram" -lt 8192 ]; then
-        log_warning "Low RAM detected. Recommended: 8GB+ RAM"
-    fi
-    
-    log_success "System requirements check completed"
-}
-
-# Main variables
-USER=$(whoami)
-SCRIPT_PATH=$(readlink -f "$0")
-AZTEC_DIR="/home/$USER/.aztec"
-ENV_FILE="$AZTEC_DIR/.env"
-SERVICE_NAME="aztec.service"
-
-# Check if running as root
-if [ "$USER" = "root" ]; then
-    log_error "This script should not be run as root. Please run as a regular user."
-    exit 1
-fi
-
-log_info "Starting Aztec Validator Node Setup"
-log_info "User: $USER"
-log_info "Script path: $SCRIPT_PATH"
-
-# Check system requirements
-check_system_requirements
-
-# Step 1: Update system packages
-log_info "Step 1: Updating system packages"
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y curl wget tar gzip jq net-tools ufw
-
-# Step 2: Check and install Docker
-log_info "Step 2: Checking Docker installation"
-if command -v docker &> /dev/null; then
-    log_success "Docker is already installed. Version: $(docker --version)"
-else
-    log_info "Installing Docker..."
-    if ! curl -fsSL https://get.docker.com -o /tmp/get-docker.sh; then
-        log_error "Failed to download Docker installation script"
-        exit 1
-    fi
-    
-    if ! sudo sh /tmp/get-docker.sh; then
-        log_error "Docker installation failed"
-        exit 1
-    fi
-    
-    rm -f /tmp/get-docker.sh
-    log_success "Docker installed successfully"
-fi
-
-# Check if we need to handle Docker group (only on first run)
-if [ -z "$REENTERED" ]; then
-    log_info "Step 3: Setting up Docker group and permissions"
-
-    # Create docker group if not exists
-    if ! getent group docker > /dev/null 2>&1; then
-        log_info "Creating docker group..."
-        sudo groupadd docker
-        log_success "Docker group created"
-    else
-        log_success "Docker group already exists"
-    fi
-
-    # Check if user is already in docker group
-    if ! groups $USER | grep -q docker; then
-        log_info "Adding user $USER to docker group..."
-        sudo usermod -aG docker $USER
-        log_success "User $USER added to docker group"
-        
-        log_warning "Switching shell to activate docker group..."
-        echo
-        log_info "⚠️  This will continue the script in a new shell with docker group enabled."
-        echo
-        
-        # Re-run script in a new shell with the docker group applied
-        exec sg docker "REENTERED=1 bash \"$SCRIPT_PATH\""
-        exit 0
-    else
-        log_success "User $USER is already in docker group"
-        export REENTERED=1
-    fi
-fi
-
-# ------------ CONTINUE HERE after REENTERED ------------
-
-log_success "✅ Docker group is active in current shell. Continuing setup..."
-
-# Step 4: Test Docker functionality
-log_info "Step 4: Testing Docker functionality"
-if ! docker run --rm hello-world > /dev/null 2>&1; then
-    log_error "Docker test failed. Please check Docker installation."
-    exit 1
-fi
-log_success "Docker is working correctly"
-
-# Step 5: Setup Aztec directory and download binaries
-log_info "Step 5: Setting up Aztec directory and downloading binaries"
-
-# Create directory with proper permissions
-mkdir -p "$AZTEC_DIR/bin"
-mkdir -p "$AZTEC_DIR/data"
-chmod 755 "$AZTEC_DIR"
-
-# Download Aztec CLI instead of binary
-log_info "Installing Aztec CLI..."
-if ! command -v node &> /dev/null; then
-    log_info "Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-fi
-
-# Install Aztec CLI globally
-if ! npm install -g @aztec/cli@alpha-testnet; then
-    log_error "Failed to install Aztec CLI"
-    exit 1
-fi
-
-log_success "Aztec CLI installed successfully"
-
-# Step 6: Create environment configuration
-log_info "Step 6: Creating environment configuration"
-
-# Get public IP with fallback
-log_info "Detecting public IP address..."
-P2P_IP=$(curl -s --connect-timeout 10 https://api.ipify.org 2>/dev/null || curl -s --connect-timeout 10 https://ipv4.icanhazip.com 2>/dev/null || echo "")
-
-if [ -z "$P2P_IP" ]; then
-    log_warning "Could not auto-detect public IP. Please enter manually."
+    # Get RPC URL
     while true; do
-        read -p "Enter your public IP address: " P2P_IP
-        if [[ "$P2P_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        echo -n "Enter Ethereum L1 RPC URL (e.g., https://mainnet.infura.io/v3/YOUR_KEY): "
+        read -r rpc_url
+        if validate_url "$rpc_url"; then
             break
         else
-            log_error "Invalid IP address format. Please try again."
+            error "Invalid URL format. Please enter a valid HTTP/HTTPS URL."
         fi
     done
-else
-    log_success "Detected public IP: $P2P_IP"
-fi
-
-# Backup existing config if it exists
-if [ -f "$ENV_FILE" ]; then
-    backup_file="${ENV_FILE}.backup.$(date +%s)"
-    cp "$ENV_FILE" "$backup_file"
-    log_info "Existing configuration backed up to: $backup_file"
-fi
-
-# Input validation and collection
-echo
-log_info "Please provide the following configuration parameters:"
-
-# ETHEREUM_HOSTS
-while true; do
-    echo "Example: https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
-    read -p "Enter ETHEREUM_HOSTS (comma-separated URLs): " ETHEREUM_HOSTS
-    if [ -z "$ETHEREUM_HOSTS" ]; then
-        log_error "ETHEREUM_HOSTS cannot be empty"
-        continue
-    fi
     
-    # Validate URLs
-    valid_urls=true
-    IFS=',' read -ra URLS <<< "$ETHEREUM_HOSTS"
-    for url in "${URLS[@]}"; do
-        url=$(echo "$url" | xargs) # trim whitespace
-        if ! validate_url "$url"; then
-            log_error "Invalid URL format: $url"
-            valid_urls=false
+    # Get Beacon URL
+    while true; do
+        echo -n "Enter Ethereum Beacon Chain URL (e.g., https://beacon-nd-123-456-789.p2pify.com): "
+        read -r beacon_url
+        if validate_url "$beacon_url"; then
             break
+        else
+            error "Invalid URL format. Please enter a valid HTTP/HTTPS URL."
         fi
     done
     
-    if $valid_urls; then
-        break
-    fi
-done
-
-# L1_CONSENSUS_HOST_URLS
-while true; do
-    echo "Example: https://eth-sepolia-beacon-api.publicnode.com"
-    read -p "Enter L1_CONSENSUS_HOST_URLS (comma-separated URLs): " L1_CONSENSUS_HOST_URLS
-    if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
-        log_error "L1_CONSENSUS_HOST_URLS cannot be empty"
-        continue
-    fi
-    
-    # Validate URLs
-    valid_urls=true
-    IFS=',' read -ra URLS <<< "$L1_CONSENSUS_HOST_URLS"
-    for url in "${URLS[@]}"; do
-        url=$(echo "$url" | xargs) # trim whitespace
-        if ! validate_url "$url"; then
-            log_error "Invalid URL format: $url"
-            valid_urls=false
+    # Get Private Key (hidden input)
+    while true; do
+        private_key=$(read_hidden "Enter your validator private key (will be hidden): ")
+        if validate_private_key "$private_key"; then
             break
+        else
+            error "Invalid private key format. Must be 0x followed by 64 hexadecimal characters."
         fi
     done
     
-    if $valid_urls; then
-        break
+    # Get Coinbase Address
+    while true; do
+        echo -n "Enter your coinbase address (0x...): "
+        read -r coinbase_address
+        if validate_eth_address "$coinbase_address"; then
+            break
+        else
+            error "Invalid Ethereum address format. Must be 0x followed by 40 hexadecimal characters."
+        fi
+    done
+    
+    # Get Public IP automatically
+    log "Detecting public IP address..."
+    public_ip=$(get_public_ip)
+    log "Detected public IP: $public_ip"
+    
+    # Confirm IP or allow manual override
+    echo -n "Use detected IP ($public_ip)? [Y/n]: "
+    read -r confirm_ip
+    if [[ "$confirm_ip" =~ ^[Nn]$ ]]; then
+        echo -n "Enter your public IP address: "
+        read -r public_ip
     fi
-done
+    
+    # Create .env file
+    cat > "$env_file" << EOF
+# Aztec Node Configuration
+# Generated on $(date)
 
-# VALIDATOR_PRIVATE_KEY (secure input)
-while true; do
-    read -s -p "Enter VALIDATOR_PRIVATE_KEY (input hidden): " VALIDATOR_PRIVATE_KEY
-    echo
-    
-    if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
-        log_error "VALIDATOR_PRIVATE_KEY cannot be empty"
-        continue
-    fi
-    
-    if ! validate_private_key "$VALIDATOR_PRIVATE_KEY"; then
-        log_error "Invalid private key format. Must be 64 hex characters (with or without 0x prefix)"
-        continue
-    fi
-    
-    # Ensure 0x prefix
-    if [[ ! "$VALIDATOR_PRIVATE_KEY" =~ ^0x ]]; then
-        VALIDATOR_PRIVATE_KEY="0x$VALIDATOR_PRIVATE_KEY"
-    fi
-    
-    break
-done
+# Ethereum L1 RPC URL
+RPC_URL=$rpc_url
 
-# COINBASE
-while true; do
-    read -p "Enter COINBASE address: " COINBASE
-    if [ -z "$COINBASE" ]; then
-        log_error "COINBASE address cannot be empty"
-        continue
-    fi
-    
-    if ! validate_ethereum_address "$COINBASE"; then
-        log_error "Invalid Ethereum address format"
-        continue
-    fi
-    
-    break
-done
+# Ethereum Beacon Chain URL
+BEACON_URL=$beacon_url
 
-# Create environment file with secure permissions
-cat > "$ENV_FILE" <<EOF
-# Aztec Validator Configuration
-# Generated on: $(date)
+# Validator Private Key (Keep this secure!)
+VALIDATOR_PRIVATE_KEY=$private_key
 
-ETHEREUM_HOSTS=$ETHEREUM_HOSTS
-L1_CONSENSUS_HOST_URLS=$L1_CONSENSUS_HOST_URLS
-VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
-COINBASE=$COINBASE
-P2P_IP=$P2P_IP
-DATA_DIRECTORY=$AZTEC_DIR/data
+# Coinbase Address
+COINBASE_ADDRESS=$coinbase_address
+
+# Public IP for P2P networking
+PUBLIC_IP=$public_ip
+
+# Additional Configuration
+NETWORK=alpha-testnet
+LOG_LEVEL=info
 EOF
+    
+    # Set secure permissions
+    chmod 600 "$env_file"
+    
+    log "Environment file created at: $env_file"
+    log "File permissions set to 600 (owner read/write only)"
+}
 
-# Set secure permissions (only owner can read/write)
-chmod 600 "$ENV_FILE"
-log_success "Environment file created at: $ENV_FILE"
+# Function to load environment variables
+load_env() {
+    local env_file="$HOME/.aztec/.env"
+    if [[ -f "$env_file" ]]; then
+        source "$env_file"
+        log "Environment variables loaded from $env_file"
+    else
+        warning "Environment file not found. Please run configuration first."
+        return 1
+    fi
+}
 
-# Step 7: Create systemd service
-log_info "Step 7: Creating systemd service"
-
-# Check for existing service
-if systemctl list-units --full -all | grep -Fq "$SERVICE_NAME"; then
-    log_info "Existing Aztec service found. Stopping and removing..."
-    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-    sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-    log_success "Existing service stopped and disabled"
+# Check if running as root
+if [[ $EUID -eq 0 ]]; then
+   error "This script should not be run as root. Please run as a regular user with sudo privileges."
 fi
 
-# Create service file with correct aztec command
-sudo tee "/etc/systemd/system/$SERVICE_NAME" > /dev/null <<EOF
+# Main installation function
+main() {
+    log "Starting Aztec Node Setup with Environment Configuration..."
+    
+    # Step 1: System Update and Package Installation
+    log "Updating system packages..."
+    sudo apt-get update && sudo apt-get upgrade -y || error "Failed to update system"
+    
+    log "Installing required packages..."
+    sudo apt install curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip libleveldb-dev -y || error "Failed to install packages"
+    
+    sudo apt update -y && sudo apt upgrade -y || error "Failed to update system again"
+    
+    # Step 2: Remove old Docker installations
+    log "Removing old Docker installations..."
+    for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do 
+        sudo apt-get remove $pkg -y 2>/dev/null || true
+    done
+    
+    # Step 3: Install Docker
+    log "Installing Docker..."
+    sudo apt-get update || error "Failed to update package list"
+    sudo apt-get install ca-certificates curl gnupg -y || error "Failed to install Docker prerequisites"
+    
+    sudo install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg || error "Failed to add Docker GPG key"
+    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null || error "Failed to add Docker repository"
+    
+    sudo apt update -y && sudo apt upgrade -y || error "Failed to update after adding Docker repo"
+    
+    sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y || error "Failed to install Docker"
+    
+    # Test Docker installation
+    log "Testing Docker installation..."
+    sudo docker run hello-world || error "Docker test failed"
+    
+    # Enable and restart Docker service
+    sudo systemctl enable docker || error "Failed to enable Docker service"
+    sudo systemctl restart docker || error "Failed to restart Docker service"
+    
+    # Add current user to docker group
+    sudo usermod -aG docker $USER || warning "Failed to add user to docker group"
+    
+    # Step 4: Install Aztec
+    log "Installing Aztec..."
+    bash -i <(curl -s https://install.aztec.network) || error "Failed to install Aztec"
+    
+    # Add Aztec to PATH
+    echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc || true
+    
+    # Step 5: Setup Aztec
+    log "Setting up Aztec..."
+    export PATH="$HOME/.aztec/bin:$PATH"
+    aztec-up latest || error "Failed to setup Aztec"
+    
+    # Step 6: Create environment configuration
+    create_env_file
+    
+    # Step 7: Create systemd service with environment variables
+    create_systemd_service
+    
+    log "Aztec installation and configuration completed successfully!"
+}
+
+# Function to create systemd service with environment support
+create_systemd_service() {
+    log "Creating systemd service file with environment support..."
+    
+    cat << 'EOF' | sudo tee /etc/systemd/system/aztec-node.service > /dev/null
 [Unit]
-Description=Aztec Validator Node
-Documentation=https://docs.aztec.network/
-After=network-online.target
-Wants=network-online.target
+Description=Aztec Node Service
+After=network.target docker.service
+Requires=docker.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=$AZTEC_DIR
-EnvironmentFile=$ENV_FILE
-ExecStart=/usr/bin/aztec start --node --archiver --sequencer \\
-  --network alpha-testnet \\
-  --l1-rpc-urls \${ETHEREUM_HOSTS} \\
-  --l1-consensus-host-urls \${L1_CONSENSUS_HOST_URLS} \\
-  --sequencer.validatorPrivateKey \${VALIDATOR_PRIVATE_KEY} \\
-  --sequencer.coinbase \${COINBASE} \\
-  --p2p.p2pIp \${P2P_IP} \\
-  --p2p.p2pPort 40400 \\
-  --port 8080 \\
-  --data-directory \${DATA_DIRECTORY}
 Restart=always
-RestartSec=10
+RestartSec=5
+User=%i
+WorkingDirectory=%h
+Environment=PATH=%h/.aztec/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=%h/.aztec/.env
+ExecStartPre=/bin/bash -c 'source %h/.bashrc'
+ExecStart=/bin/bash -c 'source %h/.bashrc && aztec start --node --archiver --sequencer --network ${NETWORK} --l1-rpc-urls ${RPC_URL} --l1-consensus-host-urls ${BEACON_URL} --sequencer.validatorPrivateKey ${VALIDATOR_PRIVATE_KEY} --sequencer.coinbase ${COINBASE_ADDRESS} --p2p.p2pIp ${PUBLIC_IP}'
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=aztec-node
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-log_success "Service file created"
+    # Replace placeholders with actual user
+    sudo sed -i "s/%i/$USER/g" /etc/systemd/system/aztec-node.service
+    sudo sed -i "s|%h|$HOME|g" /etc/systemd/system/aztec-node.service
+    
+    sudo systemctl daemon-reload || error "Failed to reload systemd daemon"
+    
+    log "Systemd service created successfully!"
+    show_service_commands
+}
 
-# Step 8: Configure firewall
-log_info "Step 8: Configuring firewall"
-sudo ufw allow 8080/tcp
-sudo ufw allow 40400/tcp
-sudo ufw allow 40400/udp
-sudo ufw --force enable
-log_success "Firewall configured"
+# Function to show service management commands
+show_service_commands() {
+    log "Service Management Commands:"
+    echo "Enable service:  sudo systemctl enable aztec-node"
+    echo "Start service:   sudo systemctl start aztec-node"
+    echo "Stop service:    sudo systemctl stop aztec-node"
+    echo "Restart service: sudo systemctl restart aztec-node"
+    echo "Check status:    sudo systemctl status aztec-node"
+    echo "View logs:       sudo journalctl -u aztec-node -f"
+    echo "Edit config:     nano $HOME/.aztec/.env"
+    echo ""
+    info "After editing .env file, restart the service to apply changes"
+}
 
-# Step 9: Configure and start service
-log_info "Step 9: Configuring and starting service..."
-sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl start "$SERVICE_NAME"
+# Function to show configuration management
+show_config_management() {
+    log "Configuration Management:"
+    echo "Environment file location: $HOME/.aztec/.env"
+    echo "To reconfigure: ./aztec-setup.sh --config"
+    echo "To view config: cat $HOME/.aztec/.env"
+    echo "To edit config: nano $HOME/.aztec/.env"
+    echo ""
+    warning "Keep your private key secure! The .env file has restricted permissions (600)."
+}
 
-# Wait a moment and check service status
-sleep 5
+# Handle command line arguments
+case "${1:-}" in
+    --config|--configure)
+        log "Running configuration only..."
+        create_env_file
+        show_config_management
+        exit 0
+        ;;
+    --help|-h)
+        echo "Aztec Node Setup Script"
+        echo "Usage: $0 [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --config     Run configuration only"
+        echo "  --help       Show this help message"
+        echo ""
+        echo "Default: Run full installation and configuration"
+        exit 0
+        ;;
+esac
 
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    log_success "✅ Aztec validator service started successfully!"
-else
-    log_warning "Service may have issues starting. Checking status..."
-    sudo systemctl status "$SERVICE_NAME" --no-pager
-fi
+# Cleanup function
+cleanup() {
+    log "Cleaning up temporary files..."
+    # Add any cleanup operations here
+}
 
-# Step 10: Create monitoring script
-log_info "Step 10: Creating monitoring script"
-cat > "$AZTEC_DIR/monitor.sh" <<'EOF'
-#!/bin/bash
+# Trap to ensure cleanup on exit
+trap cleanup EXIT
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Run main function
+main
 
-echo -e "${BLUE}=== Aztec Node Monitor ===${NC}"
-echo
+# Show final instructions
+show_config_management
+show_service_commands
 
-# Check service status
-echo -e "${BLUE}Service Status:${NC}"
-if systemctl is-active --quiet aztec.service; then
-    echo -e "${GREEN}✅ Service is running${NC}"
-else
-    echo -e "${RED}❌ Service is not running${NC}"
-fi
-
-# Check sync status
-echo -e "\n${BLUE}Sync Status:${NC}"
-local_block=$(curl -s -X POST -H 'Content-Type: application/json' \
--d '{"jsonrpc":"2.0","method":"node_getL2Tips","params":[],"id":67}' \
-http://localhost:8080 2>/dev/null | jq -r ".result.proven.number" 2>/dev/null)
-
-if [ "$local_block" != "null" ] && [ -n "$local_block" ]; then
-    echo -e "${GREEN}✅ Local block: $local_block${NC}"
-else
-    echo -e "${RED}❌ Cannot get local block number${NC}"
-fi
-
-# Check ports
-echo -e "\n${BLUE}Port Status:${NC}"
-if netstat -tlnp 2>/dev/null | grep -q ":8080"; then
-    echo -e "${GREEN}✅ Port 8080 is open${NC}"
-else
-    echo -e "${RED}❌ Port 8080 is not open${NC}"
-fi
-
-if netstat -tlnp 2>/dev/null | grep -q ":40400"; then
-    echo -e "${GREEN}✅ Port 40400 is open${NC}"
-else
-    echo -e "${RED}❌ Port 40400 is not open${NC}"
-fi
-
-echo
-echo -e "${BLUE}Commands:${NC}"
-echo "View logs: sudo journalctl -fu aztec.service"
-echo "Restart:   sudo systemctl restart aztec.service"
-echo "Stop:      sudo systemctl stop aztec.service"
-EOF
-
-chmod +x "$AZTEC_DIR/monitor.sh"
-log_success "Monitoring script created at: $AZTEC_DIR/monitor.sh"
-
-# Final instructions
-echo
-echo "==============================================="
-log_success "🎉 Aztec Validator Setup Complete!"
-echo "==============================================="
-echo
-log_info "📋 Useful Commands:"
-echo "   • Monitor node: ${BLUE}$AZTEC_DIR/monitor.sh${NC}"
-echo "   • Check service status: ${BLUE}sudo systemctl status $SERVICE_NAME${NC}"
-echo "   • View logs: ${BLUE}sudo journalctl -fu $SERVICE_NAME${NC}"
-echo "   • Restart service: ${BLUE}sudo systemctl restart $SERVICE_NAME${NC}"
-echo "   • Stop service: ${BLUE}sudo systemctl stop $SERVICE_NAME${NC}"
-echo
-log_info "📁 Configuration files:"
-echo "   • Environment: ${BLUE}$ENV_FILE${NC}"
-echo "   • Service: ${BLUE}/etc/systemd/system/$SERVICE_NAME${NC}"
-echo "   • Data directory: ${BLUE}$AZTEC_DIR/data${NC}"
-echo
-log_warning "🔍 Next Steps:"
-echo "   1. Wait for node to sync (check with monitor script)"
-echo "   2. Register as validator when fully synced:"
-echo "      ${BLUE}aztec add-l1-validator \\${NC}"
-echo "      ${BLUE}  --l1-rpc-urls $ETHEREUM_HOSTS \\${NC}"
-echo "      ${BLUE}  --private-key $VALIDATOR_PRIVATE_KEY \\${NC}"
-echo "      ${BLUE}  --attester $COINBASE \\${NC}"
-echo "      ${BLUE}  --proposer-eoa $COINBASE \\${NC}"
-echo "      ${BLUE}  --staking-asset-handler 0xF739D03e98e23A7B65940848aBA8921fF3bAc4b2 \\${NC}"
-echo "      ${BLUE}  --l1-chain-id 11155111${NC}"
-echo
-log_success "Setup completed successfully! 🚀"
+log "Script execution completed!"
+log "Please reboot your system or log out and back in for group changes to take effect."
+log "Your configuration is stored securely in $HOME/.aztec/.env"
