@@ -268,7 +268,7 @@ main() {
     
     # Step 1: System Update and Package Installation
     log "Updating system packages..."
-    sudo apt-get update && sudo apt-get upgrade -y || error "Failed to update system"
+    sudo apt-get update || error "Failed to update system"
     
     log "Installing required packages..."
     sudo apt install curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip libleveldb-dev -y || error "Failed to install packages"
