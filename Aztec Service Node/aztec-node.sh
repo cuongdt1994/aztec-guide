@@ -273,8 +273,6 @@ main() {
     log "Installing required packages..."
     sudo apt install curl iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip libleveldb-dev -y || error "Failed to install packages"
     
-    sudo apt update -y && sudo apt upgrade -y || error "Failed to update system again"
-    
     # Step 2: Remove old Docker installations
     log "Removing old Docker installations..."
     for pkg in docker.io docker-doc docker-compose podman-docker containerd runc; do 
