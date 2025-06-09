@@ -232,7 +232,9 @@ install_aztec_cli() {
     # Add to PATH
     echo 'export PATH="$PATH:/root/.aztec/bin"' >> ~/.bashrc
     export PATH="$PATH:/root/.aztec/bin"
-    
+    echo 'Aztec Update Lastest version.....'
+	/root/.aztec/bin/aztec-up alpha-testnet || aztec-up alpha-testnet
+	
     log_success "Aztec CLI setup completed"
 }
 
