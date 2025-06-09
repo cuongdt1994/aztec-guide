@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Aztec Node Setup Script - Complete Fixed Version
-# Description: Complete setup script for Aztec blockchain node with all fixes
+# Aztec Node Setup Script - Single File Fixed Version
+# Description: Complete setup script for Aztec blockchain node with PATH fixes
 # Author: System Administrator
 # Date: $(date)
 
@@ -60,6 +60,58 @@ show_config_management() {
     warning "Keep your private key secure! The .env file has restricted permissions (600)."
 }
 
+# FIXED: Function to handle PATH consistently across all profile files
+setup_aztec_path() {
+    local aztec_path="$HOME/.aztec/bin"
+    local path_export='export PATH="$HOME/.aztec/bin:$PATH"'
+    
+    log "Setting up Aztec PATH in all profile files..."
+    
+    # Add to .bashrc (for non-login shells)
+    if ! grep -q '.aztec/bin' ~/.bashrc 2>/dev/null; then
+        echo "$path_export" >> ~/.bashrc
+        log "Added Aztec to PATH in ~/.bashrc"
+    fi
+    
+    # Add to .bash_profile (for login shells)
+    if ! grep -q '.aztec/bin' ~/.bash_profile 2>/dev/null; then
+        echo "$path_export" >> ~/.bash_profile
+        log "Added Aztec to PATH in ~/.bash_profile"
+    fi
+    
+    # Add to .profile (fallback)
+    if ! grep -q '.aztec/bin' ~/.profile 2>/dev/null; then
+        echo "$path_export" >> ~/.profile
+        log "Added Aztec to PATH in ~/.profile"
+    fi
+    
+    # Update current session PATH
+    export PATH="$aztec_path:$PATH"
+    log "Updated PATH for current session"
+}
+
+# FIXED: Function to check if Aztec is properly installed and accessible
+check_aztec_installation() {
+    local aztec_binary="$HOME/.aztec/bin/aztec"
+    
+    # Check if binary exists
+    if [[ ! -f "$aztec_binary" ]]; then
+        return 1
+    fi
+    
+    # Update PATH for current session
+    export PATH="$HOME/.aztec/bin:$PATH"
+    
+    # Check if aztec command is accessible
+    if command -v aztec >/dev/null 2>&1; then
+        log "Aztec is properly installed and accessible"
+        return 0
+    else
+        warning "Aztec binary exists but not in PATH"
+        return 1
+    fi
+}
+
 # Function to handle all system package operations efficiently
 setup_system_packages() {
     log "Setting up system packages and repositories..."
@@ -86,7 +138,7 @@ setup_system_packages() {
     log "System packages installed successfully"
 }
 
-# Function to setup Docker repository and install Docker - FIXED
+# Function to setup Docker repository and install Docker
 setup_docker() {
     log "Setting up Docker..."
     
@@ -128,7 +180,7 @@ setup_docker() {
     log "Docker installed and configured successfully"
 }
 
-# Function to apply docker group without causing infinite loop - COMPLETELY FIXED
+# Function to apply docker group without causing infinite loop
 apply_docker_group() {
     # Skip if already applied to prevent loop
     if [[ "$DOCKER_GROUP_APPLIED" == "true" ]]; then
@@ -153,7 +205,7 @@ apply_docker_group() {
     return 0
 }
 
-# Function to verify docker access - IMPROVED
+# Function to verify docker access
 verify_docker_access() {
     log "Verifying Docker access..."
     
@@ -271,7 +323,7 @@ create_env_file() {
     # Create .aztec directory if it doesn't exist
     mkdir -p "$HOME/.aztec"
     
-    # Get RPC URL[4]
+    # Get RPC URL
     while true; do
         echo -n "Enter Ethereum L1 RPC URL (e.g., https://mainnet.infura.io/v3/YOUR_KEY): "
         read -r rpc_url
@@ -282,7 +334,7 @@ create_env_file() {
         fi
     done
     
-    # Get Beacon URL[4]
+    # Get Beacon URL
     while true; do
         echo -n "Enter Ethereum Beacon Chain URL (e.g., https://beacon-nd-123-456-789.p2pify.com): "
         read -r beacon_url
@@ -327,7 +379,7 @@ create_env_file() {
         read -r public_ip
     fi
     
-    # Create .env file[4]
+    # Create .env file
     cat > "$env_file" << EOF
 # Aztec Node Configuration
 # Generated on $(date)
@@ -344,10 +396,10 @@ VALIDATOR_PRIVATE_KEY=$private_key
 # Coinbase Address
 COINBASE_ADDRESS=$coinbase_address
 
-# Public IP for P2P networking[4]
+# Public IP for P2P networking
 P2P_IP=$public_ip
 
-# Additional Configuration[4]
+# Additional Configuration
 NETWORK=alpha-testnet
 LOG_LEVEL=info
 DATA_DIRECTORY=/home/$USER/.aztec/data
@@ -372,7 +424,7 @@ load_env() {
     fi
 }
 
-# Function to create systemd service with environment support[4]
+# Function to create systemd service with environment support
 create_systemd_service() {
     log "Creating systemd service file with environment support..."
     
@@ -416,22 +468,16 @@ if [[ $EUID -eq 0 ]]; then
    error "This script should not be run as root. Please run as a regular user with sudo privileges."
 fi
 
-# Main installation function - COMPLETELY FIXED VERSION
+# FIXED: Main installation function with proper PATH handling
 main() {
-    log "Starting Aztec Node Setup - Complete Fixed Version..."
+    log "Starting Aztec Node Setup - Single File Fixed Version..."
     
-    # Step 1: Check if Aztec is already installed
-    if [[ -f "$HOME/.aztec/bin/aztec" ]]; then
-        log "Aztec is already installed, skipping installation steps..."
+    # Step 1: Check if Aztec is already installed with proper PATH check
+    if check_aztec_installation; then
+        log "Aztec is already installed and accessible, skipping installation steps..."
         
-        # Ensure PATH is set
-        if ! grep -q '.aztec/bin' ~/.bashrc; then
-            echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
-            log "Added Aztec to PATH in ~/.bashrc"
-        fi
-        
-        # Source bashrc to update PATH
-        export PATH="$HOME/.aztec/bin:$PATH"
+        # Ensure PATH is properly set in all profile files
+        setup_aztec_path
         
         # Continue with configuration
         create_env_file
@@ -443,19 +489,19 @@ main() {
         return 0
     fi
     
-    # Step 1: Optimized System Package Setup
+    # Step 2: System Package Setup
     setup_system_packages
     
-    # Step 2: Setup Docker with proper checks and fixes
+    # Step 3: Setup Docker
     setup_docker
     
-    # Step 3: Apply Docker group permissions (FIXED - no loop)
+    # Step 4: Apply Docker group permissions
     apply_docker_group
     
-    # Step 4: Verify Docker access with robust checking
+    # Step 5: Verify Docker access
     verify_docker_access
     
-    # Step 5: Install Aztec (if not already done)
+    # Step 6: Install Aztec
     log "Installing Aztec..."
     
     # Ensure Docker is accessible for Aztec installer
@@ -469,30 +515,24 @@ main() {
         error "Failed to install Aztec. Please check Docker permissions and try again."
     fi
     
-    # Add Aztec to PATH
-    if ! grep -q '.aztec/bin' ~/.bashrc; then
-        echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
-        log "Added Aztec to PATH in ~/.bashrc"
-    fi
+    # Step 7: Setup Aztec PATH properly
+    setup_aztec_path
     
-    # Source bashrc to update PATH
-    export PATH="$HOME/.aztec/bin:$PATH"
-    
-    # Step 6: Setup Aztec
+    # Step 8: Setup Aztec
     log "Setting up Aztec..."
     
     if ! aztec-up latest; then
         error "Failed to setup Aztec. Please check your installation."
     fi
     
-    # Step 7: Create environment configuration
+    # Step 9: Create environment configuration
     create_env_file
     
-    # Step 8: Create systemd service with environment variables
+    # Step 10: Create systemd service
     create_systemd_service
     
     log "Aztec installation and configuration completed successfully!"
-    log "✓ Fixed infinite loop issue!"
+    log "✓ Fixed PATH issues across all profile files!"
     log "✓ Fixed Docker permissions and service issues!"
     log "✓ Environment configuration created!"
     log "✓ Systemd service configured!"
@@ -502,12 +542,13 @@ main() {
 case "${1:-}" in
     --config|--configure)
         log "Running configuration only..."
+        setup_aztec_path
         create_env_file
         show_config_management
         exit 0
         ;;
     --help|-h)
-        echo "Aztec Node Setup Script - Complete Fixed Version"
+        echo "Aztec Node Setup Script - Single File Fixed Version"
         echo "Usage: $0 [OPTIONS]"
         echo ""
         echo "Options:"
@@ -515,6 +556,7 @@ case "${1:-}" in
         echo "  --help       Show this help message"
         echo ""
         echo "Fixes:"
+        echo "  - Fixed PATH issues across all profile files"
         echo "  - Fixed infinite loop in Docker group application"
         echo "  - Fixed Docker service and permission issues"
         echo "  - Added automatic environment configuration"
@@ -542,7 +584,7 @@ show_config_management
 show_service_commands
 
 log "Script execution completed successfully!"
-log "✓ All issues resolved!"
+log "✓ All PATH issues resolved!"
 log "✓ Environment file created: $HOME/.aztec/.env"
 log "✓ Systemd service configured: /etc/systemd/system/aztec.service"
 log "✓ Ready to start your Aztec node!"
