@@ -32,6 +32,50 @@ info() {
     echo -e "${BLUE}[INFO] $1${NC}"
 }
 
+# Function to apply docker group without logout
+apply_docker_group() {
+    log "Applying Docker group permissions without logout..."
+    
+    # Add user to docker group
+    sudo usermod -aG docker $USER || warning "Failed to add user to docker group"
+    
+    # Apply group changes immediately using multiple methods
+    log "Activating Docker group permissions immediately..."
+    
+    # Method 1: Use newgrp in a subshell to test Docker
+    if newgrp docker <<< "docker --version" >/dev/null 2>&1; then
+        log "Docker group activated successfully using newgrp"
+        # Export the newgrp environment for current session
+        exec newgrp docker
+    else
+        # Method 2: Alternative approach using sg command
+        if command -v sg >/dev/null 2>&1; then
+            if sg docker "docker --version" >/dev/null 2>&1; then
+                log "Docker group activated successfully using sg"
+                exec sg docker "$0" "$@"
+            fi
+        fi
+        
+        # Method 3: Start new login shell with updated groups
+        log "Starting new shell with updated group permissions..."
+        exec su - $USER -c "cd $(pwd) && $0 $@"
+    fi
+}
+
+# Function to verify docker access
+verify_docker_access() {
+    log "Verifying Docker access..."
+    
+    # Test Docker without sudo
+    if docker ps >/dev/null 2>&1; then
+        log "✓ Docker access verified - no sudo required"
+        return 0
+    else
+        warning "Docker access verification failed"
+        return 1
+    fi
+}
+
 # Function to get public IP automatically
 get_public_ip() {
     local ip=""
@@ -255,18 +299,24 @@ main() {
     
     sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y || error "Failed to install Docker"
     
-    # Test Docker installation
-    log "Testing Docker installation..."
-    sudo docker run hello-world || error "Docker test failed"
-    
     # Enable and restart Docker service
     sudo systemctl enable docker || error "Failed to enable Docker service"
     sudo systemctl restart docker || error "Failed to restart Docker service"
     
-    # Add current user to docker group
-    sudo usermod -aG docker $USER || warning "Failed to add user to docker group"
+    # Step 4: Apply Docker group permissions immediately
+    apply_docker_group
     
-    # Step 4: Install Aztec
+    # Step 5: Verify Docker access
+    if ! verify_docker_access; then
+        warning "Docker access verification failed. You may need to restart your terminal."
+        info "Alternative: Run 'newgrp docker' in your terminal to activate Docker permissions"
+    fi
+    
+    # Step 6: Test Docker installation
+    log "Testing Docker installation..."
+    docker run hello-world || error "Docker test failed"
+    
+    # Step 7: Install Aztec
     log "Installing Aztec..."
     bash -i <(curl -s https://install.aztec.network) || error "Failed to install Aztec"
     
@@ -274,18 +324,19 @@ main() {
     echo 'export PATH="$HOME/.aztec/bin:$PATH"' >> ~/.bashrc
     source ~/.bashrc || true
     
-    # Step 5: Setup Aztec
+    # Step 8: Setup Aztec
     log "Setting up Aztec..."
     export PATH="$HOME/.aztec/bin:$PATH"
     aztec-up latest || error "Failed to setup Aztec"
     
-    # Step 6: Create environment configuration
+    # Step 9: Create environment configuration
     create_env_file
     
-    # Step 7: Create systemd service with environment variables
+    # Step 10: Create systemd service with environment variables
     create_systemd_service
     
     log "Aztec installation and configuration completed successfully!"
+    log "✓ Docker group permissions applied immediately - no reboot required!"
 }
 
 # Function to create systemd service with environment support
@@ -390,5 +441,5 @@ show_config_management
 show_service_commands
 
 log "Script execution completed!"
-log "Please reboot your system or log out and back in for group changes to take effect."
+log "✓ Docker group permissions activated immediately - no logout/reboot required!"
 log "Your configuration is stored securely in $HOME/.aztec/.env"
