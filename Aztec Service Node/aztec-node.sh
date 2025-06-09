@@ -31,7 +31,7 @@ check_root() {
 
 # Create project directory
 setup_project_directory() {
-    local install_dir="aztec-sequencer"
+    local install_dir="aztec"
     log_step "Setting up project directory: $install_dir"
     
     mkdir -p "$install_dir" && cd "$install_dir"
@@ -272,7 +272,7 @@ setup_systemd_service() {
     if [[ ! "$SETUP_SYSTEMD" =~ ^[Nn]$ ]]; then
         log_step "Creating systemd service"
         
-        cat > /etc/systemd/system/aztec-sequencer.service << EOF
+        cat > /etc/systemd/system/aztec.service << EOF
 [Unit]
 Description=Aztec Sequencer Node
 Documentation=https://docs.aztec.network/
@@ -319,20 +319,20 @@ EOF
         
         # Reload and enable service
         systemctl daemon-reload
-        systemctl enable aztec-sequencer
+        systemctl enable aztec
         
         echo -e "${CYAN}🚀 Start the service now? [Y/n]: ${NC}"
         read -p "" START_NOW
         
         if [[ ! "$START_NOW" =~ ^[Nn]$ ]]; then
-            systemctl start aztec-sequencer
+            systemctl start aztec
             log_success "Aztec sequencer service started"
             
             # Show service status
             echo -e "\n${CYAN}📊 Service Status:${NC}"
-            systemctl status aztec-sequencer --no-pager -l
+            systemctl status aztec --no-pager -l
         else
-            log_info "Service created but not started. Use 'systemctl start aztec-sequencer' to start."
+            log_info "Service created but not started. Use 'systemctl start aztec' to start."
         fi
         
         print_service_commands
@@ -344,12 +344,12 @@ EOF
 # Print service management commands
 print_service_commands() {
     echo -e "\n${CYAN}🔧 Service Management Commands:${NC}"
-    echo "   • Start service:    systemctl start aztec-sequencer"
-    echo "   • Stop service:     systemctl stop aztec-sequencer"
-    echo "   • Restart service:  systemctl restart aztec-sequencer"
-    echo "   • Check status:     systemctl status aztec-sequencer"
-    echo "   • View logs:        journalctl -u aztec-sequencer -f"
-    echo "   • Disable service:  systemctl disable aztec-sequencer"
+    echo "   • Start service:    systemctl start aztec"
+    echo "   • Stop service:     systemctl stop aztec"
+    echo "   • Restart service:  systemctl restart aztec"
+    echo "   • Check status:     systemctl status aztec"
+    echo "   • View logs:        journalctl -u aztec -f"
+    echo "   • Disable service:  systemctl disable aztec"
 }
 
 # Print manual run commands
