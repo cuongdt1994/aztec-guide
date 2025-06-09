@@ -129,7 +129,6 @@ apply_docker_group() {
     fi
 }
 
-
 # Function to verify docker access
 verify_docker_access() {
     log "Verifying Docker access..."
