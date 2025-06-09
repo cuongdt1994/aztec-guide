@@ -32,6 +32,31 @@ info() {
     echo -e "${BLUE}[INFO] $1${NC}"
 }
 
+# Function to show service management commands
+show_service_commands() {
+    log "Service Management Commands:"
+    echo "Enable service:  sudo systemctl enable aztec"
+    echo "Start service:   sudo systemctl start aztec"
+    echo "Stop service:    sudo systemctl stop aztec"
+    echo "Restart service: sudo systemctl restart aztec"
+    echo "Check status:    sudo systemctl status aztec"
+    echo "View logs:       sudo journalctl -u aztec -f"
+    echo "Edit config:     nano $HOME/.aztec/.env"
+    echo ""
+    info "After editing .env file, restart the service to apply changes"
+}
+
+# Function to show configuration management
+show_config_management() {
+    log "Configuration Management:"
+    echo "Environment file location: $HOME/.aztec/.env"
+    echo "To reconfigure: ./aztec-setup.sh --config"
+    echo "To view config: cat $HOME/.aztec/.env"
+    echo "To edit config: nano $HOME/.aztec/.env"
+    echo ""
+    warning "Keep your private key secure! The .env file has restricted permissions (600)."
+}
+
 # Function to handle all system package operations efficiently
 setup_system_packages() {
     log "Setting up system packages and repositories..."
@@ -337,31 +362,6 @@ EOF
     
     log "Systemd service created successfully!"
     show_service_commands
-}
-
-# Function to show service management commands
-show_service_commands() {
-    log "Service Management Commands:"
-    echo "Enable service:  sudo systemctl enable aztec"
-    echo "Start service:   sudo systemctl start aztec"
-    echo "Stop service:    sudo systemctl stop aztec"
-    echo "Restart service: sudo systemctl restart aztec"
-    echo "Check status:    sudo systemctl status aztec"
-    echo "View logs:       sudo journalctl -u aztec -f"
-    echo "Edit config:     nano $HOME/.aztec/.env"
-    echo ""
-    info "After editing .env file, restart the service to apply changes"
-}
-
-# Function to show configuration management
-show_config_management() {
-    log "Configuration Management:"
-    echo "Environment file location: $HOME/.aztec/.env"
-    echo "To reconfigure: ./aztec-setup.sh --config"
-    echo "To view config: cat $HOME/.aztec/.env"
-    echo "To edit config: nano $HOME/.aztec/.env"
-    echo ""
-    warning "Keep your private key secure! The .env file has restricted permissions (600)."
 }
 
 # Check if running as root
