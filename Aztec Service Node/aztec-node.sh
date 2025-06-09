@@ -64,6 +64,31 @@ validate_private_key() {
     return 0
 }
 
+# Check system requirements
+check_system_requirements() {
+    log_info "Checking system requirements..."
+    
+    # Check OS
+    if [[ ! -f /etc/os-release ]]; then
+        log_error "Cannot determine OS. This script requires Linux."
+        exit 1
+    fi
+    
+    # Check available disk space (minimum 50GB)
+    available_space=$(df / | awk 'NR==2 {print $4}')
+    if [ "$available_space" -lt 52428800 ]; then  # 50GB in KB
+        log_warning "Low disk space detected. Recommended: 50GB+ available"
+    fi
+    
+    # Check RAM (minimum 8GB)
+    total_ram=$(free -m | awk 'NR==2{print $2}')
+    if [ "$total_ram" -lt 8192 ]; then
+        log_warning "Low RAM detected. Recommended: 8GB+ RAM"
+    fi
+    
+    log_success "System requirements check completed"
+}
+
 # Main variables
 USER=$(whoami)
 SCRIPT_PATH=$(readlink -f "$0")
@@ -81,8 +106,16 @@ log_info "Starting Aztec Validator Node Setup"
 log_info "User: $USER"
 log_info "Script path: $SCRIPT_PATH"
 
-# Step 1: Check and install Docker
-log_info "Step 1: Checking Docker installation"
+# Check system requirements
+check_system_requirements
+
+# Step 1: Update system packages
+log_info "Step 1: Updating system packages"
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y curl wget tar gzip jq net-tools ufw
+
+# Step 2: Check and install Docker
+log_info "Step 2: Checking Docker installation"
 if command -v docker &> /dev/null; then
     log_success "Docker is already installed. Version: $(docker --version)"
 else
@@ -92,7 +125,7 @@ else
         exit 1
     fi
     
-    if ! sh /tmp/get-docker.sh; then
+    if ! sudo sh /tmp/get-docker.sh; then
         log_error "Docker installation failed"
         exit 1
     fi
@@ -103,12 +136,12 @@ fi
 
 # Check if we need to handle Docker group (only on first run)
 if [ -z "$REENTERED" ]; then
-    log_info "Step 2: Setting up Docker group and permissions"
+    log_info "Step 3: Setting up Docker group and permissions"
 
     # Create docker group if not exists
     if ! getent group docker > /dev/null 2>&1; then
         log_info "Creating docker group..."
-        newgrp docker
+        sudo groupadd docker
         log_success "Docker group created"
     else
         log_success "Docker group already exists"
@@ -138,35 +171,40 @@ fi
 
 log_success "✅ Docker group is active in current shell. Continuing setup..."
 
-# Step 3: Setup Aztec directory and download binaries
-log_info "Step 3: Setting up Aztec directory and downloading binaries"
+# Step 4: Test Docker functionality
+log_info "Step 4: Testing Docker functionality"
+if ! docker run --rm hello-world > /dev/null 2>&1; then
+    log_error "Docker test failed. Please check Docker installation."
+    exit 1
+fi
+log_success "Docker is working correctly"
+
+# Step 5: Setup Aztec directory and download binaries
+log_info "Step 5: Setting up Aztec directory and downloading binaries"
 
 # Create directory with proper permissions
-mkdir -p "$AZTEC_DIR"
+mkdir -p "$AZTEC_DIR/bin"
+mkdir -p "$AZTEC_DIR/data"
 chmod 755 "$AZTEC_DIR"
 
-if [ -f "$AZTEC_DIR/bin/aztec" ]; then
-    log_success "Aztec binary already exists. Skipping download."
-else
-    log_info "Downloading Aztec binaries..."
-    
-    if ! curl -sL https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/bin.tar.gz -o /tmp/bin.tar.gz; then
-        log_error "Failed to download Aztec binaries"
-        exit 1
-    fi
-    
-    if ! tar -xzf /tmp/bin.tar.gz -C "$AZTEC_DIR"; then
-        log_error "Failed to extract Aztec binaries"
-        exit 1
-    fi
-    
-    rm -f /tmp/bin.tar.gz
-    chmod +x "$AZTEC_DIR/bin/aztec"
-    log_success "Aztec binaries downloaded and installed successfully"
+# Download Aztec CLI instead of binary
+log_info "Installing Aztec CLI..."
+if ! command -v node &> /dev/null; then
+    log_info "Installing Node.js..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    sudo apt-get install -y nodejs
 fi
 
-# Step 4: Create environment configuration
-log_info "Step 4: Creating environment configuration"
+# Install Aztec CLI globally
+if ! npm install -g @aztec/cli@alpha-testnet; then
+    log_error "Failed to install Aztec CLI"
+    exit 1
+fi
+
+log_success "Aztec CLI installed successfully"
+
+# Step 6: Create environment configuration
+log_info "Step 6: Creating environment configuration"
 
 # Get public IP with fallback
 log_info "Detecting public IP address..."
@@ -199,6 +237,7 @@ log_info "Please provide the following configuration parameters:"
 
 # ETHEREUM_HOSTS
 while true; do
+    echo "Example: https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
     read -p "Enter ETHEREUM_HOSTS (comma-separated URLs): " ETHEREUM_HOSTS
     if [ -z "$ETHEREUM_HOSTS" ]; then
         log_error "ETHEREUM_HOSTS cannot be empty"
@@ -224,6 +263,7 @@ done
 
 # L1_CONSENSUS_HOST_URLS
 while true; do
+    echo "Example: https://eth-sepolia-beacon-api.publicnode.com"
     read -p "Enter L1_CONSENSUS_HOST_URLS (comma-separated URLs): " L1_CONSENSUS_HOST_URLS
     if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
         log_error "L1_CONSENSUS_HOST_URLS cannot be empty"
@@ -296,14 +336,15 @@ L1_CONSENSUS_HOST_URLS=$L1_CONSENSUS_HOST_URLS
 VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
 COINBASE=$COINBASE
 P2P_IP=$P2P_IP
+DATA_DIRECTORY=$AZTEC_DIR/data
 EOF
 
 # Set secure permissions (only owner can read/write)
 chmod 600 "$ENV_FILE"
 log_success "Environment file created at: $ENV_FILE"
 
-# Step 5: Create systemd service
-log_info "Step 5: Creating systemd service"
+# Step 7: Create systemd service
+log_info "Step 7: Creating systemd service"
 
 # Check for existing service
 if systemctl list-units --full -all | grep -Fq "$SERVICE_NAME"; then
@@ -313,31 +354,33 @@ if systemctl list-units --full -all | grep -Fq "$SERVICE_NAME"; then
     log_success "Existing service stopped and disabled"
 fi
 
-# Create service file
+# Create service file with correct aztec command
 sudo tee "/etc/systemd/system/$SERVICE_NAME" > /dev/null <<EOF
 [Unit]
 Description=Aztec Validator Node
 Documentation=https://docs.aztec.network/
-After=network-online.target docker.service
+After=network-online.target
 Wants=network-online.target
-Requires=docker.service
 
 [Service]
 Type=simple
 User=$USER
 WorkingDirectory=$AZTEC_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$AZTEC_DIR/bin/aztec start --node --archiver --sequencer \\
+ExecStart=/usr/bin/aztec start --node --archiver --sequencer \\
   --network alpha-testnet \\
   --l1-rpc-urls \${ETHEREUM_HOSTS} \\
   --l1-consensus-host-urls \${L1_CONSENSUS_HOST_URLS} \\
   --sequencer.validatorPrivateKey \${VALIDATOR_PRIVATE_KEY} \\
   --sequencer.coinbase \${COINBASE} \\
   --p2p.p2pIp \${P2P_IP} \\
-  --p2p.p2pPort 40401 \\
-  --port 8081
+  --p2p.p2pPort 40400 \\
+  --port 8080 \\
+  --data-directory \${DATA_DIRECTORY}
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -345,14 +388,22 @@ EOF
 
 log_success "Service file created"
 
-# Configure and start service
-log_info "Configuring and starting service..."
+# Step 8: Configure firewall
+log_info "Step 8: Configuring firewall"
+sudo ufw allow 8080/tcp
+sudo ufw allow 40400/tcp
+sudo ufw allow 40400/udp
+sudo ufw --force enable
+log_success "Firewall configured"
+
+# Step 9: Configure and start service
+log_info "Step 9: Configuring and starting service..."
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl start "$SERVICE_NAME"
 
 # Wait a moment and check service status
-sleep 3
+sleep 5
 
 if systemctl is-active --quiet "$SERVICE_NAME"; then
     log_success "✅ Aztec validator service started successfully!"
@@ -361,22 +412,72 @@ else
     sudo systemctl status "$SERVICE_NAME" --no-pager
 fi
 
+# Step 10: Create monitoring script
+log_info "Step 10: Creating monitoring script"
+cat > "$AZTEC_DIR/monitor.sh" <<'EOF'
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}=== Aztec Node Monitor ===${NC}"
+echo
+
+# Check service status
+echo -e "${BLUE}Service Status:${NC}"
+if systemctl is-active --quiet aztec.service; then
+    echo -e "${GREEN}✅ Service is running${NC}"
+else
+    echo -e "${RED}❌ Service is not running${NC}"
+fi
+
+# Check sync status
+echo -e "\n${BLUE}Sync Status:${NC}"
+local_block=$(curl -s -X POST -H 'Content-Type: application/json' \
+-d '{"jsonrpc":"2.0","method":"node_getL2Tips","params":[],"id":67}' \
+http://localhost:8080 2>/dev/null | jq -r ".result.proven.number" 2>/dev/null)
+
+if [ "$local_block" != "null" ] && [ -n "$local_block" ]; then
+    echo -e "${GREEN}✅ Local block: $local_block${NC}"
+else
+    echo -e "${RED}❌ Cannot get local block number${NC}"
+fi
+
+# Check ports
+echo -e "\n${BLUE}Port Status:${NC}"
+if netstat -tlnp 2>/dev/null | grep -q ":8080"; then
+    echo -e "${GREEN}✅ Port 8080 is open${NC}"
+else
+    echo -e "${RED}❌ Port 8080 is not open${NC}"
+fi
+
+if netstat -tlnp 2>/dev/null | grep -q ":40400"; then
+    echo -e "${GREEN}✅ Port 40400 is open${NC}"
+else
+    echo -e "${RED}❌ Port 40400 is not open${NC}"
+fi
+
+echo
+echo -e "${BLUE}Commands:${NC}"
+echo "View logs: sudo journalctl -fu aztec.service"
+echo "Restart:   sudo systemctl restart aztec.service"
+echo "Stop:      sudo systemctl stop aztec.service"
+EOF
+
+chmod +x "$AZTEC_DIR/monitor.sh"
+log_success "Monitoring script created at: $AZTEC_DIR/monitor.sh"
+
 # Final instructions
 echo
 echo "==============================================="
 log_success "🎉 Aztec Validator Setup Complete!"
 echo "==============================================="
 echo
-log_warning "🚧 IMPORTANT: Firewall Configuration Required"
-echo "   You must open the following ports:"
-echo "   • Port 8081 (Aztec API)"
-echo "   • Port 40401 (P2P Network)"
-echo
-echo "   Run these commands to configure UFW:"
-echo "   ${BLUE}sudo ufw allow 8081/tcp${NC}"
-echo "   ${BLUE}sudo ufw allow 40401/tcp${NC}"
-echo
 log_info "📋 Useful Commands:"
+echo "   • Monitor node: ${BLUE}$AZTEC_DIR/monitor.sh${NC}"
 echo "   • Check service status: ${BLUE}sudo systemctl status $SERVICE_NAME${NC}"
 echo "   • View logs: ${BLUE}sudo journalctl -fu $SERVICE_NAME${NC}"
 echo "   • Restart service: ${BLUE}sudo systemctl restart $SERVICE_NAME${NC}"
@@ -385,6 +486,17 @@ echo
 log_info "📁 Configuration files:"
 echo "   • Environment: ${BLUE}$ENV_FILE${NC}"
 echo "   • Service: ${BLUE}/etc/systemd/system/$SERVICE_NAME${NC}"
-echo "   • Binary: ${BLUE}$AZTEC_DIR/bin/aztec${NC}"
+echo "   • Data directory: ${BLUE}$AZTEC_DIR/data${NC}"
+echo
+log_warning "🔍 Next Steps:"
+echo "   1. Wait for node to sync (check with monitor script)"
+echo "   2. Register as validator when fully synced:"
+echo "      ${BLUE}aztec add-l1-validator \\${NC}"
+echo "      ${BLUE}  --l1-rpc-urls $ETHEREUM_HOSTS \\${NC}"
+echo "      ${BLUE}  --private-key $VALIDATOR_PRIVATE_KEY \\${NC}"
+echo "      ${BLUE}  --attester $COINBASE \\${NC}"
+echo "      ${BLUE}  --proposer-eoa $COINBASE \\${NC}"
+echo "      ${BLUE}  --staking-asset-handler 0xF739D03e98e23A7B65940848aBA8921fF3bAc4b2 \\${NC}"
+echo "      ${BLUE}  --l1-chain-id 11155111${NC}"
 echo
 log_success "Setup completed successfully! 🚀"
