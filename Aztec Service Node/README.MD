@@ -22,16 +22,6 @@ A comprehensive automation script for installing and configuring Aztec blockchai
 
 ## 🛠️ Quick Installation
 
-### Step 1: Download Script
+### Step 1: Download Script and Run Installation
 
-wget https://raw.githubusercontent.com/your-repo/aztec-setup/main/aztec-setup.sh
-chmod +x aztec-setup.sh
-
-### Step 2: Run Installation
-
-./aztec-setup.sh
-
-### Step 3: Configure Service
-
-sudo systemctl enable aztec-node
-sudo systemctl start aztec-node
+curl -fsSL "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/main/Aztec%20Service%20Node/aztec-node.sh" | bash

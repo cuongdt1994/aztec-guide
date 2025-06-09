@@ -292,7 +292,7 @@ main() {
 create_systemd_service() {
     log "Creating systemd service file with environment support..."
     
-    cat << 'EOF' | sudo tee /etc/systemd/system/aztec-node.service > /dev/null
+    cat << 'EOF' | sudo tee /etc/systemd/system/aztec.service > /dev/null
 [Unit]
 Description=Aztec Node Service
 After=network.target docker.service
@@ -311,15 +311,15 @@ ExecStartPre=/bin/bash -c 'source %h/.bashrc'
 ExecStart=/bin/bash -c 'source %h/.bashrc && aztec start --node --archiver --sequencer --network ${NETWORK} --l1-rpc-urls ${RPC_URL} --l1-consensus-host-urls ${BEACON_URL} --sequencer.validatorPrivateKey ${VALIDATOR_PRIVATE_KEY} --sequencer.coinbase ${COINBASE_ADDRESS} --p2p.p2pIp ${PUBLIC_IP}'
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=aztec-node
+SyslogIdentifier=aztec
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     # Replace placeholders with actual user
-    sudo sed -i "s/%i/$USER/g" /etc/systemd/system/aztec-node.service
-    sudo sed -i "s|%h|$HOME|g" /etc/systemd/system/aztec-node.service
+    sudo sed -i "s/%i/$USER/g" /etc/systemd/system/aztec.service
+    sudo sed -i "s|%h|$HOME|g" /etc/systemd/system/aztec.service
     
     sudo systemctl daemon-reload || error "Failed to reload systemd daemon"
     
@@ -330,12 +330,12 @@ EOF
 # Function to show service management commands
 show_service_commands() {
     log "Service Management Commands:"
-    echo "Enable service:  sudo systemctl enable aztec-node"
-    echo "Start service:   sudo systemctl start aztec-node"
-    echo "Stop service:    sudo systemctl stop aztec-node"
-    echo "Restart service: sudo systemctl restart aztec-node"
-    echo "Check status:    sudo systemctl status aztec-node"
-    echo "View logs:       sudo journalctl -u aztec-node -f"
+    echo "Enable service:  sudo systemctl enable aztec"
+    echo "Start service:   sudo systemctl start aztec"
+    echo "Stop service:    sudo systemctl stop aztec"
+    echo "Restart service: sudo systemctl restart aztec"
+    echo "Check status:    sudo systemctl status aztec"
+    echo "View logs:       sudo journalctl -u aztec -f"
     echo "Edit config:     nano $HOME/.aztec/.env"
     echo ""
     info "After editing .env file, restart the service to apply changes"
