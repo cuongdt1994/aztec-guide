@@ -92,28 +92,18 @@ apply_docker_group() {
     # Add user to docker group
     sudo usermod -aG docker $USER || warning "Failed to add user to docker group"
     
-    # Apply group changes immediately using multiple methods
+    # Use sg instead of newgrp to continue script execution
     log "Activating Docker group permissions immediately..."
     
-    # Method 1: Use newgrp in a subshell to test Docker
-    if newgrp docker <<< "docker --version" >/dev/null 2>&1; then
-        log "Docker group activated successfully using newgrp"
-        # Export the newgrp environment for current session
-        exec newgrp docker
+    if command -v sg >/dev/null 2>&1; then
+        # Continue script execution with new group permissions
+        exec sg docker "$0" "$@"
     else
-        # Method 2: Alternative approach using sg command
-        if command -v sg >/dev/null 2>&1; then
-            if sg docker "docker --version" >/dev/null 2>&1; then
-                log "Docker group activated successfully using sg"
-                exec sg docker "$0" "$@"
-            fi
-        fi
-        
-        # Method 3: Start new login shell with updated groups
-        log "Starting new shell with updated group permissions..."
-        exec su - $USER -c "cd $(pwd) && $0 $@"
+        warning "sg command not available. Please restart terminal or logout/login."
+        return 1
     fi
 }
+
 
 # Function to verify docker access
 verify_docker_access() {
