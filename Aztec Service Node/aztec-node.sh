@@ -31,7 +31,7 @@ check_root() {
 
 # Create project directory
 setup_project_directory() {
-    local install_dir="aztec"
+    local install_dir="/root/.aztec"
     log_step "Setting up project directory: $install_dir"
     
     mkdir -p "$install_dir" && cd "$install_dir"
@@ -326,7 +326,7 @@ install_docker() {
 install_aztec_cli() {
     log_step "Setting up Aztec CLI"
     
-    # Set up Aztec directory
+    # Set up Aztec directory - sử dụng /root/.aztec làm thư mục chính
     AZTEC_DIR="/root/.aztec"
     mkdir -p "$AZTEC_DIR/bin"
     
@@ -411,10 +411,9 @@ Requires=docker.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$PROJECT_PATH
-EnvironmentFile=$ENV_FILE
+WorkingDirectory=/root/.aztec
+EnvironmentFile=/root/.aztec/.env
 Environment=HOME=/root
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.aztec/bin
 
 ExecStartPre=/bin/sleep 10
 ExecStart=/root/.aztec/bin/aztec start \\
@@ -430,12 +429,6 @@ ExecStart=/root/.aztec/bin/aztec start \\
 
 Restart=always
 RestartSec=30
-StartLimitInterval=300
-StartLimitBurst=5
-
-# Resource limits
-LimitNOFILE=65536
-LimitNPROC=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -486,7 +479,7 @@ print_service_commands() {
 # Print manual run commands
 print_manual_commands() {
     echo -e "\n${CYAN}🚀 Manual Run Command:${NC}"
-    echo "cd $PROJECT_PATH && source .env"
+    echo "cd /root/.aztec && source .env"
     echo "export PATH=\"\$PATH:/root/.aztec/bin\""
     echo "aztec start --node --archiver --sequencer \\"
     echo "  --network alpha-testnet \\"
@@ -501,8 +494,8 @@ print_manual_commands() {
 print_summary() {
     echo -e "\n${GREEN}🎉 Aztec Sequencer Setup Complete!${NC}"
     echo -e "\n${CYAN}📋 Configuration Summary:${NC}"
-    echo "   • Project Path: $PROJECT_PATH"
-    echo "   • Environment File: $ENV_FILE"
+    echo "   • Project Path: /root/.aztec"
+    echo "   • Environment File: /root/.aztec/.env"
     echo "   • Network: Alpha Testnet"
     echo "   • Validator Address: $VALIDATOR_ADDRESS"
     echo "   • P2P IP: $P2P_IP"
