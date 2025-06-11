@@ -24,4 +24,14 @@ A comprehensive automation script for installing and configuring Aztec blockchai
 
 ### Step 1: Download Script and Run Installation
 
-curl -fsSL "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/main/Aztec%20Service%20Node/aztec-node.sh" | bash
+# Download script
+
+wget -O aztec-node.sh "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/main/Aztec%20Service%20Node/aztec-node.sh"
+
+# Approve Permissions
+
+chmod +x aztec-node.sh
+
+# Running with permissions root
+
+sudo ./aztec-node.sh
