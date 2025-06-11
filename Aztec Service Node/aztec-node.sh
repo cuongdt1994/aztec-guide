@@ -392,15 +392,13 @@ EOF
 
 # Setup systemd service
 setup_systemd_service() {
-    echo -e "${CYAN}🛠️  Would you like to set up Aztec as a systemd service?${NC}"
+    echo -e "${CYAN}🛠️  Setting up Aztec as a systemd service...${NC}"
     echo "   This will allow automatic startup and better process management."
-    read -p "Setup systemd service? [Y/n]: " SETUP_SYSTEMD
     
-    if [[ ! "$SETUP_SYSTEMD" =~ ^[Nn]$ ]]; then
-        log_step "Creating systemd service"
-        
-        # Create service file with better error handling
-        cat > /etc/systemd/system/aztec.service << EOF
+    log_step "Creating systemd service"
+    
+    # Create service file with better error handling
+    cat > /etc/systemd/system/aztec.service << EOF
 [Unit]
 Description=Aztec Sequencer Node
 Documentation=https://docs.aztec.network/
@@ -414,8 +412,6 @@ User=root
 WorkingDirectory=/root/.aztec
 EnvironmentFile=/root/.aztec/.env
 Environment=HOME=/root
-
-ExecStartPre=/bin/sleep 10
 ExecStart=/root/.aztec/bin/aztec start \\
     --node \\
     --archiver \\
@@ -426,43 +422,34 @@ ExecStart=/root/.aztec/bin/aztec start \\
     --sequencer.validatorPrivateKey=\${VALIDATOR_PRIVATE_KEY} \\
     --sequencer.coinbase=\${VALIDATOR_ADDRESS} \\
     --p2p.p2pIp=\${P2P_IP}
-
 Restart=always
 RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    # Reload and enable service
+    systemctl daemon-reload
+    systemctl enable aztec
+    
+    echo -e "${CYAN}🚀 Starting the service...${NC}"
+    
+    if systemctl start aztec; then
+        log_success "Aztec sequencer service started"
         
-        # Reload and enable service
-        systemctl daemon-reload
-        systemctl enable aztec
+        # Wait a moment for service to initialize
+        sleep 5
         
-        echo -e "${CYAN}🚀 Start the service now? [Y/n]: ${NC}"
-        read -p "" START_NOW
-        
-        if [[ ! "$START_NOW" =~ ^[Nn]$ ]]; then
-            if systemctl start aztec; then
-                log_success "Aztec sequencer service started"
-                
-                # Wait a moment for service to initialize
-                sleep 5
-                
-                # Show service status
-                echo -e "\n${CYAN}📊 Service Status:${NC}"
-                systemctl status aztec --no-pager -l
-            else
-                log_error "Failed to start Aztec service"
-                log_info "Check logs with: journalctl -u aztec -f"
-            fi
-        else
-            log_info "Service created but not started. Use 'systemctl start aztec' to start."
-        fi
-        
-        print_service_commands
+        # Show service status
+        echo -e "\n${CYAN}📊 Service Status:${NC}"
+        systemctl status aztec --no-pager -l
     else
-        print_manual_commands
+        log_error "Failed to start Aztec service"
+        log_info "Check logs with: journalctl -u aztec -f"
     fi
+    
+    print_service_commands
 }
 
 # Print service management commands
