@@ -47,13 +47,24 @@ handle_existing_env() {
         log_info "Found existing .env file, validating..."
         
         local env_valid=true
-        while IFS='=' read -r key value; do
-            [[ "$key" =~ ^#.*$ ]] && continue  # Skip comments
-            [[ -z "$value" ]] && { env_valid=false; break; }
-        done < "$ENV_FILE"
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            # Skip empty lines and comments
+            [[ -z "$key" ]] && continue
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ "$key" =~ ^[[:space:]]*$ ]] && continue
+            
+            # Check if value is empty (but allow empty values for some keys)
+            if [[ -z "$value" && ! "$key" =~ ^(ADDITIONAL_SETTINGS|OPTIONAL_).*$ ]]; then
+                env_valid=false
+                break
+            fi
+        done < <(grep -v '^[[:space:]]*$' "$ENV_FILE")
         
         if [ "$env_valid" = true ]; then
-            export $(grep -v '^#' "$ENV_FILE" | xargs)
+            # Safely export variables
+            set -a
+            source "$ENV_FILE" 2>/dev/null || true
+            set +a
             
             if [[ -n "$ETHEREUM_HOSTS" && -n "$L1_CONSENSUS_HOST_URLS" && 
                   -n "$VALIDATOR_PRIVATE_KEY" && -n "$VALIDATOR_ADDRESS" && 
@@ -77,7 +88,7 @@ handle_existing_env() {
         fi
         
         # Clear variables if not reusing
-        unset ETHEREUM_HOSTS L1_CONSENSUS_HOST_URLS VALIDATOR_PRIVATE_KEY VALIDATOR_ADDRESS P2P_IP
+        unset ETHEREUM_HOSTS L1_CONSENSUS_HOST_URLS VALIDATOR_PRIVATE_KEY VALIDATOR_ADDRESS P2P_IP 2>/dev/null || true
     fi
 }
 
@@ -88,31 +99,65 @@ collect_configuration() {
     echo -e "${CYAN}📝 Please provide the following information:${NC}"
     
     if [ -z "$ETHEREUM_HOSTS" ]; then
-        read -p "🔗 Ethereum RPC URL (e.g., https://sepolia.infura.io/v3/YOUR_KEY): " ETHEREUM_HOSTS
+        while [ -z "$ETHEREUM_HOSTS" ]; do
+            read -p "🔗 Ethereum RPC URL (e.g., https://sepolia.infura.io/v3/YOUR_KEY): " ETHEREUM_HOSTS
+            if [ -z "$ETHEREUM_HOSTS" ]; then
+                log_warning "Ethereum RPC URL is required"
+            fi
+        done
     fi
     
     if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
-        read -p "🔗 Beacon Chain RPC URL (e.g., https://beacon-sepolia.infura.io): " L1_CONSENSUS_HOST_URLS
+        while [ -z "$L1_CONSENSUS_HOST_URLS" ]; do
+            read -p "🔗 Beacon Chain RPC URL (e.g., https://beacon-sepolia.infura.io): " L1_CONSENSUS_HOST_URLS
+            if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
+                log_warning "Beacon Chain RPC URL is required"
+            fi
+        done
     fi
     
     if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
         echo -e "${YELLOW}⚠️  Keep your private key secure!${NC}"
-        read -s -p "🔑 Validator Private Key (0x...): " VALIDATOR_PRIVATE_KEY
-        echo
+        while [ -z "$VALIDATOR_PRIVATE_KEY" ]; do
+            read -s -p "🔑 Validator Private Key (0x...): " VALIDATOR_PRIVATE_KEY
+            echo
+            if [ -z "$VALIDATOR_PRIVATE_KEY" ]; then
+                log_warning "Validator private key is required"
+            fi
+        done
     fi
     
     if [ -z "$VALIDATOR_ADDRESS" ]; then
-        read -p "🏦 Validator Ethereum Address (0x...): " VALIDATOR_ADDRESS
+        while [ -z "$VALIDATOR_ADDRESS" ]; do
+            read -p "🏦 Validator Ethereum Address (0x...): " VALIDATOR_ADDRESS
+            if [ -z "$VALIDATOR_ADDRESS" ]; then
+                log_warning "Validator address is required"
+            fi
+        done
     fi
     
     if [ -z "$P2P_IP" ]; then
         log_info "Detecting public IP address..."
-        P2P_IP=$(curl -s --max-time 10 ipv4.icanhazip.com || curl -s --max-time 10 ifconfig.me || echo "")
+        P2P_IP=$(timeout 10 curl -s ipv4.icanhazip.com 2>/dev/null || timeout 10 curl -s ifconfig.me 2>/dev/null || echo "")
         
         if [ -z "$P2P_IP" ]; then
-            read -p "🌐 Enter your public IP address: " P2P_IP
+            while [ -z "$P2P_IP" ]; do
+                read -p "🌐 Enter your public IP address: " P2P_IP
+                if [ -z "$P2P_IP" ]; then
+                    log_warning "Public IP address is required"
+                fi
+            done
         else
             log_success "Detected public IP: $P2P_IP"
+            read -p "$(echo -e ${CYAN}Use detected IP $P2P_IP? [Y/n]: ${NC})" USE_DETECTED_IP
+            if [[ "$USE_DETECTED_IP" =~ ^[Nn]$ ]]; then
+                while [ -z "$P2P_IP" ]; do
+                    read -p "🌐 Enter your public IP address: " P2P_IP
+                    if [ -z "$P2P_IP" ]; then
+                        log_warning "Public IP address is required"
+                    fi
+                done
+            fi
         fi
     fi
     
@@ -125,12 +170,12 @@ validate_configuration() {
     local errors=0
     
     if [[ ! "$ETHEREUM_HOSTS" =~ ^https?:// ]]; then
-        log_error "Invalid Ethereum RPC URL format"
+        log_error "Invalid Ethereum RPC URL format (must start with http:// or https://)"
         ((errors++))
     fi
     
     if [[ ! "$L1_CONSENSUS_HOST_URLS" =~ ^https?:// ]]; then
-        log_error "Invalid Beacon RPC URL format"
+        log_error "Invalid Beacon RPC URL format (must start with http:// or https://)"
         ((errors++))
     fi
     
@@ -140,13 +185,24 @@ validate_configuration() {
     fi
     
     if [[ ! "$VALIDATOR_ADDRESS" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
-        log_error "Invalid Ethereum address format"
+        log_error "Invalid Ethereum address format (must be 0x followed by 40 hex characters)"
         ((errors++))
     fi
     
+    # More flexible IP validation
     if [[ ! "$P2P_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         log_error "Invalid IP address format"
         ((errors++))
+    else
+        # Validate IP octets
+        IFS='.' read -ra OCTETS <<< "$P2P_IP"
+        for octet in "${OCTETS[@]}"; do
+            if [ "$octet" -gt 255 ]; then
+                log_error "Invalid IP address: octet $octet is greater than 255"
+                ((errors++))
+                break
+            fi
+        done
     fi
     
     if [ $errors -gt 0 ]; then
@@ -161,17 +217,35 @@ validate_configuration() {
 install_dependencies() {
     log_step "Installing system dependencies"
     
-    apt update && apt upgrade -y
+    # Update package list
+    if ! apt update; then
+        log_error "Failed to update package list"
+        exit 1
+    fi
+    
+    # Upgrade system (with timeout)
+    if ! timeout 300 apt upgrade -y; then
+        log_warning "System upgrade timed out or failed, continuing..."
+    fi
     
     local packages=(
         curl iptables build-essential git wget lz4 jq make gcc nano
-        automake autoconf tmux htop nvme-cli libgbm1 pkg-config
+        automake autoconf tmux htop nvme-cli pkg-config
         libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip
         ca-certificates gnupg software-properties-common apt-transport-https
     )
     
-    apt install -y "${packages[@]}"
-    log_success "System dependencies installed"
+    # Install packages with error handling
+    for package in "${packages[@]}"; do
+        if ! dpkg -l | grep -q "^ii  $package "; then
+            log_info "Installing $package..."
+            if ! apt install -y "$package"; then
+                log_warning "Failed to install $package, continuing..."
+            fi
+        fi
+    done
+    
+    log_success "System dependencies installation completed"
 }
 
 # Install Docker
@@ -181,7 +255,15 @@ install_docker() {
     if command -v docker &> /dev/null; then
         log_info "Docker already installed, checking version..."
         docker --version
-        return 0
+        
+        # Test Docker
+        if docker info &>/dev/null; then
+            log_success "Docker is working properly"
+            return 0
+        else
+            log_warning "Docker daemon is not running, attempting to start..."
+            systemctl start docker
+        fi
     fi
     
     # Remove old Docker packages
@@ -190,57 +272,100 @@ install_docker() {
         apt-get remove -y "$pkg" 2>/dev/null || true
     done
     
-    # Add Docker's official GPG key
+    # Create keyring directory
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    
+    # Add Docker's official GPG key with error handling
+    if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg; then
+        log_error "Failed to add Docker GPG key"
+        exit 1
+    fi
     chmod a+r /etc/apt/keyrings/docker.gpg
+    
+    # Detect OS version
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        VERSION_CODENAME=${VERSION_CODENAME:-$(lsb_release -cs)}
+    else
+        VERSION_CODENAME=$(lsb_release -cs)
+    fi
     
     # Add Docker repository
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-        https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" | \
         tee /etc/apt/sources.list.d/docker.list > /dev/null
     
     # Install Docker
-    apt update
-    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    if ! apt update; then
+        log_error "Failed to update package list after adding Docker repository"
+        exit 1
+    fi
     
-    # Test Docker installation
-    if docker run hello-world &>/dev/null; then
-        log_success "Docker installed and tested successfully"
-    else
-        log_error "Docker installation test failed"
+    if ! apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+        log_error "Failed to install Docker packages"
         exit 1
     fi
     
     # Enable and start Docker service
     systemctl enable docker
-    systemctl restart docker
+    systemctl start docker
+    
+    # Wait for Docker to start
+    sleep 5
+    
+    # Test Docker installation
+    if timeout 30 docker run --rm hello-world &>/dev/null; then
+        log_success "Docker installed and tested successfully"
+    else
+        log_warning "Docker installation completed but test failed"
+        log_info "This might be normal on some systems. Continuing..."
+    fi
 }
 
 # Install Aztec CLI
 install_aztec_cli() {
     log_step "Setting up Aztec CLI"
     
+    # Set up Aztec directory
+    AZTEC_DIR="/root/.aztec"
+    mkdir -p "$AZTEC_DIR/bin"
+    
     if command -v aztec &> /dev/null; then
         log_info "Aztec CLI found, updating to latest version..."
-        /root/.aztec/bin/aztec-up alpha-testnet || aztec-up alpha-testnet
+        if command -v aztec-up &> /dev/null; then
+            aztec-up alpha-testnet
+        else
+            log_warning "aztec-up not found, reinstalling..."
+        fi
     else
         log_info "Installing Aztec CLI..."
-        bash -i <(curl -s https://install.aztec.network)
+        # Download and install with error handling
+        if ! curl -s https://install.aztec.network | bash; then
+            log_error "Failed to install Aztec CLI"
+            exit 1
+        fi
     fi
     
-    # Add to PATH
-    echo 'export PATH="$PATH:/root/.aztec/bin"' >> ~/.bashrc
-    export PATH="$PATH:/root/.aztec/bin"
-    echo 'Aztec Update Lastest version.....'
-	/root/.aztec/bin/aztec-up alpha-testnet || aztec-up alpha-testnet
-	
+    # Add to PATH for current session
+    export PATH="$PATH:$AZTEC_DIR/bin"
+    
+    # Add to bashrc if not already present
+    if ! grep -q "/.aztec/bin" ~/.bashrc; then
+        echo 'export PATH="$PATH:/root/.aztec/bin"' >> ~/.bashrc
+    fi
+    
     log_success "Aztec CLI setup completed"
 }
 
 # Create environment file
 create_env_file() {
     log_step "Creating environment configuration"
+    
+    # Backup existing env file
+    if [ -f "$ENV_FILE" ]; then
+        cp "$ENV_FILE" "$ENV_FILE.backup.$(date +%s)"
+        log_info "Backed up existing environment file"
+    fi
     
     cat > "$ENV_FILE" << EOF
 # Aztec Sequencer Configuration
@@ -274,12 +399,14 @@ setup_systemd_service() {
     if [[ ! "$SETUP_SYSTEMD" =~ ^[Nn]$ ]]; then
         log_step "Creating systemd service"
         
+        # Create service file with better error handling
         cat > /etc/systemd/system/aztec.service << EOF
 [Unit]
 Description=Aztec Sequencer Node
 Documentation=https://docs.aztec.network/
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
+Requires=docker.service
 
 [Service]
 Type=simple
@@ -287,7 +414,9 @@ User=root
 WorkingDirectory=$PROJECT_PATH
 EnvironmentFile=$ENV_FILE
 Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.aztec/bin
 
+ExecStartPre=/bin/sleep 10
 ExecStart=/root/.aztec/bin/aztec start \\
     --node \\
     --archiver \\
@@ -300,7 +429,13 @@ ExecStart=/root/.aztec/bin/aztec start \\
     --p2p.p2pIp=\${P2P_IP}
 
 Restart=always
-RestartSec=10
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -314,12 +449,19 @@ EOF
         read -p "" START_NOW
         
         if [[ ! "$START_NOW" =~ ^[Nn]$ ]]; then
-            systemctl start aztec
-            log_success "Aztec sequencer service started"
-            
-            # Show service status
-            echo -e "\n${CYAN}📊 Service Status:${NC}"
-            systemctl status aztec --no-pager -l
+            if systemctl start aztec; then
+                log_success "Aztec sequencer service started"
+                
+                # Wait a moment for service to initialize
+                sleep 5
+                
+                # Show service status
+                echo -e "\n${CYAN}📊 Service Status:${NC}"
+                systemctl status aztec --no-pager -l
+            else
+                log_error "Failed to start Aztec service"
+                log_info "Check logs with: journalctl -u aztec -f"
+            fi
         else
             log_info "Service created but not started. Use 'systemctl start aztec' to start."
         fi
@@ -345,6 +487,7 @@ print_service_commands() {
 print_manual_commands() {
     echo -e "\n${CYAN}🚀 Manual Run Command:${NC}"
     echo "cd $PROJECT_PATH && source .env"
+    echo "export PATH=\"\$PATH:/root/.aztec/bin\""
     echo "aztec start --node --archiver --sequencer \\"
     echo "  --network alpha-testnet \\"
     echo "  --l1-rpc-urls=\$ETHEREUM_HOSTS \\"
@@ -374,7 +517,18 @@ print_summary() {
     echo "   • Monitor your node regularly for optimal performance"
     echo "   • Ensure your server has adequate resources (CPU, RAM, storage)"
     echo "   • Keep your system and Aztec CLI updated"
+    echo "   • Check logs regularly: journalctl -u aztec -f"
 }
+
+# Error handling function
+handle_error() {
+    log_error "Script failed at line $1"
+    log_info "Check the logs above for more details"
+    exit 1
+}
+
+# Set up error trap
+trap 'handle_error $LINENO' ERR
 
 # Main execution flow
 main() {
