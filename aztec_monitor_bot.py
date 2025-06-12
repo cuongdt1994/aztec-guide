@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""
-Aztec Node Monitor Bot for Telegram - Enhanced Version
-Monitors Aztec validator node service with ANSI color code support
-"""
-
+# Aztec Node Monitor Bot for Telegram - Enhanced Version
+# Monitors Aztec validator node service with ANSI color code support
 import asyncio
 import logging
+from math import e
 import os
 import subprocess
 import re
@@ -21,18 +19,26 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 import shlex
 import json
 import aiohttp
+import hashlib
+import shutil
+import sys
+from typing import Dict, Any
 
-# Load environment variables from .env file
-load_dotenv()
-
+load_dotenv()  # Load environment variables from .env file
+# Version information
+__version__ = "0.0.1"
+__version_info__ = (0,0,1)
 # Configuration
-BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN", "")
-AUTHORIZED_USERS = [
-    int(uid) for uid in os.getenv(
-        "AZTEC_AUTHORIZED_USERS",
-        "").split(",") if uid]
+BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("AZTEC_BOT_TOKEN environment variable not set. Please set it in .env or as an environment variable.")
+
+AUTHORIZED_USERS = [int(uid) for uid in os.getenv("AZTEC_AUTHORIZED_USERS", "").split(",") if uid]
+if not AUTHORIZED_USERS:
+    raise ValueError("AZTEC_AUTHORIZED_USERS environment variable not set or empty. Please specify at least one authorized user ID.")
+
 SERVICE_NAME = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
-LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", "50"))
+LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 
 # Logging setup
@@ -77,6 +83,9 @@ class AztecMonitor:
         self.alert_cooldown = 1800  # 30 phút cooldown
         self.monitoring_active = False
         self.monitor_thread = None
+        self.current_version = __version__
+        self.remote_version_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/version.json"
+        self.remote_file_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
     async def check_miss_rate_alert(self) -> Optional[Dict[str, Any]]:
         """Kiểm tra miss rate và gửi cảnh báo nếu cần"""
         try:
@@ -235,44 +244,114 @@ class AztecMonitor:
         return user_id in AUTHORIZED_USERS
 
     async def run_command(self, command: str) -> Tuple[bool, str]:
-        """Safer command execution"""
         try:
             logger.debug(f"Executing command: {command}")
-            if self.is_windows:
-                process = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-            else:
-                process = await asyncio.create_subprocess_exec(
-                    *shlex.split(command),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
+            process = await asyncio.create_subprocess_exec(
+                *shlex.split(command),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             stdout, stderr = await process.communicate()
-
-            stdout_decoded = stdout.decode(errors="replace").strip()
-            stderr_decoded = stderr.decode(errors="replace").strip()
-
-            logger.debug(
-                f"Command: {command}\nStdout: {
-                    stdout_decoded!r}\nStderr: {
-                    stderr_decoded!r}")
-
-            # Combine stdout and stderr for the output
+            stdout_decoded = stdout.decode(errors='replace').strip()
+            stderr_decoded = stderr.decode(errors='replace').strip()
+            
             full_output = stdout_decoded
             if stderr_decoded:
-                if full_output:
-                    full_output += "\n" + stderr_decoded
-                else:
-                    full_output = stderr_decoded
-
+                full_output = f"{full_output}\n{stderr_decoded}" if full_output else stderr_decoded
             return process.returncode == 0, full_output
         except Exception as e:
-            logger.error(f"Command execution failed for '{command}': {e}")
-            return False, str(e)
+            logger.error(f"❌ Command execution failed: {e}")
+        return False, str(e)
+    async def get_remote_version(self) -> Optional[str]:
+        """Get remote version"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.remote_version_url) as response:
+                    if response.status == 200:
+                        version_text = await response.text()
+                        # Parse version from the text
+                        version_match = re.search(r'(\d+\.\d+\.\d+)', version_text.strip())
+                        if version_match:
+                            return version_match.group(1)
+                        return version_text.strip()
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting remote version: {e}")
+            return None
+    async def get_remote_version_from_code(self) -> Optional[str]:
+        """Get remote version from code"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.remote_file_url) as response:
+                    if response.status == 200:
+                        content = await response.text()
+                        version_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+                        if version_match:
+                            return version_match.group(1)
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting version from remote code: {e}")
+            return None
 
+    async def check_for_updates(self) -> bool:
+        """Check for auto-update"""
+        try:
+            remote_version = await self.get_remote_version()
+            if not remote_version:
+                remote_version = await self.get_remote_version_from_code()
+            if not remote_version:
+                return {"error": "Could not fetch remote version"}
+            logger.info(f"Current version: {self.current_version}")
+            logger.info(f"Remote version: {remote_version}")
+            current_parsed = parse_version(self.current_version)
+            remote_parsed = parse_version(remote_version)
+            if remote_parsed > current_parsed:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(self.remote_file_url) as response:
+                        if response.status == 200:
+                            remote_content = await response.text()
+                            return {
+                                "update_available": True,
+                                "current_version": self.current_version,
+                                "remote_version": remote_version,
+                                "remote_content": remote_content,
+                                "version_comparison": f"{self.current_version} -> {remote_version}"
+                            }
+                        else:
+                            return {"error": f"Failed to fetch remote file: {response.status}"}
+            else:
+                return {
+                    "update_available": False,
+                    "current_version": self.current_version,
+                    "remote_version": remote_version,
+                    "message": "Already up to date"
+                }
+        except Exception as e:
+            logger.error(f"Error checking for updates: {e}")
+            return {"error": str(e)}                            
+    async def apply_update(self, new_content: str, new_version: str) -> bool:
+        """Apply update"""
+        try:
+            backup_path = f"{__file__}.backup.v{self.current_version}.{int(time.time())}"
+            shutil.copy2(__file__, backup_path)
+            logger.info(f"Created backup: {backup_path}")
+            with open("aztec_monitor_bot.py", "w") as f:
+                f.write(new_content)
+            logger.info(f"File updated from v{self.current_version} to v{new_version}")
+            reset_success, reset_output = await self.run_command("sudo systemctl reset-failed aztecrp.service")
+            if reset_success:
+                logger.info("Failed status reset successfully")
+            await asyncio.sleep(2)
+            success, output = await self.run_command("sudo systemctl restart aztecrp.service")
+            if success:
+                logger.info("Service restarted successfully after update")
+                return True
+            else:
+                logger.error(f"Failed to restart service: {output}")
+                return False 
+        except Exception as e:
+            logger.error(f"Update application failed: {e}")
+            return False    
     async def get_service_status(self) -> Dict:
         """Get service status"""
         success, output = await self.run_command(
@@ -2039,6 +2118,24 @@ async def handle_logs_enhanced(
         plain_text = text.replace("*", "").replace("`", "").replace("\\", "")
         await query.edit_message_text(plain_text, reply_markup=back_menu)
 
+async def update_aztec_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not monitor.check_authorization(user_id):
+        await update.message.reply_text("❌ Unauthorized access!")
+        return
+    await update.message.reply_text("Checking for updates...")
+    result = await monitor.check_for_updates()
+    if result.get("update_available"):
+        await update.message.reply_text("Update available!")
+        success = await monitor.apply_update(result["remote_content"])
+        if success:
+            await update.message.reply_text("Update applied!")
+        else:
+            await update.message.reply_text("Failed to apply update!")
+    elif result.get("error"):
+        await update.message.reply_text(f"Error: {result['error']}")
+    else:
+        await update.message.reply_text("No updates available.")
 
 async def handle_service_action(query, action: str) -> None:
     """Handle service actions"""
@@ -2080,6 +2177,7 @@ def main():
     application.add_handler(CommandHandler("start_monitor", start_monitor))
     application.add_handler(CommandHandler("stop_monitor", stop_monitor))
     application.add_handler(CommandHandler("monitor_status", monitor_status))
+    application.add_handler(CommandHandler("update_aztec", update_aztec_file))
     logger.info("Enhanced Aztec Monitor Bot started with automatic monitoring...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

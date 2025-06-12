@@ -1,0 +1,9 @@
+{
+    "version": "0.0.1",
+    "release_date": "2025-06-13",
+    "changelog": [
+        "Added version-based update system",
+        "Improved error handling",
+        "Fixed service restart issues"
+    ]
+}
