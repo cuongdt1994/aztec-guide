@@ -23,6 +23,8 @@ import hashlib
 import shutil
 import sys
 from typing import Dict, Any
+import requests
+from packaging.version import parse as parse_version
 
 load_dotenv()  # Load environment variables from .env file
 # Version information
@@ -2123,19 +2125,82 @@ async def update_aztec_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not monitor.check_authorization(user_id):
         await update.message.reply_text("❌ Unauthorized access!")
         return
-    await update.message.reply_text("Checking for updates...")
-    result = await monitor.check_for_updates()
-    if result.get("update_available"):
-        await update.message.reply_text("Update available!")
-        success = await monitor.apply_update(result["remote_content"])
-        if success:
-            await update.message.reply_text("Update applied!")
+
+    await update.message.reply_text("🔍 Checking for updates...")
+    
+    try:
+        result = await monitor.check_for_updates()
+        
+        if result.get("update_available"):
+            current_ver = result["current_version"]
+            remote_ver = result["remote_version"]
+            
+            update_msg = f"""🔄 **Update Available!**
+
+📦 **Current Version:** {current_ver}
+🆕 **New Version:** {remote_ver}
+🔄 **Updating...**
+
+Please wait while the bot updates and restarts..."""
+            
+            await update.message.reply_text(escape_markdown_v2(update_msg), parse_mode="MarkdownV2")
+            
+            success = await monitor.apply_update(result["remote_content"], remote_ver)
+            if success:
+                final_msg = f"✅ **Update Successful!**\n\nUpdated from v{current_ver} to v{remote_ver}\nBot restarted with new version."
+                await update.message.reply_text(escape_markdown_v2(final_msg), parse_mode="MarkdownV2")
+            else:
+                await update.message.reply_text("❌ Update failed. Check logs for details.")
+        elif result.get("error"):
+            await update.message.reply_text(f"❌ Error: {result['error']}")
         else:
-            await update.message.reply_text("Failed to apply update!")
-    elif result.get("error"):
-        await update.message.reply_text(f"Error: {result['error']}")
-    else:
-        await update.message.reply_text("No updates available.")
+            current_ver = result["current_version"]
+            remote_ver = result["remote_version"]
+            msg = f"✅ **Already Up to Date**\n\nCurrent version: {current_ver}\nRemote version: {remote_ver}"
+            await update.message.reply_text(escape_markdown_v2(msg), parse_mode="MarkdownV2")
+            
+    except Exception as e:
+        logger.error(f"Error in update_aztec_file: {e}")
+        await update.message.reply_text(f"❌ Unexpected error: {str(e)}")
+
+async def version_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Command để xem thông tin version"""
+    user_id = update.effective_user.id
+    if not monitor.check_authorization(user_id):
+        await update.message.reply_text("❌ Unauthorized access!")
+        return
+    
+    try:
+        remote_version = await monitor.get_remote_version()
+        if not remote_version:
+            remote_version = await monitor.get_remote_version_from_code()
+        
+        current_parsed = parse_version(__version__)
+        remote_parsed = parse_version(remote_version) if remote_version else None
+        
+        status = "🟢 Up to date"
+        if remote_parsed and remote_parsed > current_parsed:
+            status = "🟡 Update available"
+        elif not remote_version:
+            status = "🔴 Cannot check remote"
+        
+        version_text = f"""📦 **Version Information**
+
+🏷️ **Current Version:** {__version__}
+🌐 **Remote Version:** {remote_version or 'Unknown'}
+📊 **Status:** {status}
+
+⏰ **Last Check:** {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+
+**Commands:**
+• `/version` - Check version info
+• `/update_aztec` - Update if available"""
+        
+        escaped_text = escape_markdown_v2(version_text)
+        await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error checking version: {str(e)}")
 
 async def handle_service_action(query, action: str) -> None:
     """Handle service actions"""
@@ -2178,6 +2243,7 @@ def main():
     application.add_handler(CommandHandler("stop_monitor", stop_monitor))
     application.add_handler(CommandHandler("monitor_status", monitor_status))
     application.add_handler(CommandHandler("update_aztec", update_aztec_file))
+    application.add_handler(CommandHandler("version", version_info))
     logger.info("Enhanced Aztec Monitor Bot started with automatic monitoring...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
