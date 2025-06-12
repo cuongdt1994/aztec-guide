@@ -661,35 +661,6 @@ class AztecMonitor:
 
         return logs
 
-    async def start_service(self) -> Tuple[bool, str]:
-        """Start the service"""
-        success, output = await self.run_command(f"systemctl start {self.service_name}")
-        return success, (
-            f"Service {self.service_name} started"
-            if success
-            else f"Failed to start service: {output}"
-        )
-
-    async def stop_service(self) -> Tuple[bool, str]:
-        """Stop the service"""
-        success, output = await self.run_command(f"systemctl stop {self.service_name}")
-        return success, (
-            f"Service {self.service_name} stopped"
-            if success
-            else f"Failed to stop service: {output}"
-        )
-
-    async def restart_service(self) -> Tuple[bool, str]:
-        """Restart the service"""
-        success, output = await self.run_command(
-            f"systemctl restart {self.service_name}"
-        )
-        return success, (
-            f"Service {self.service_name} restarted"
-            if success
-            else f"Failed to restart service: {output}"
-        )
-
     async def get_local_peer_id(self) -> Optional[str]:
         """
         Lấy peer ID của container Aztec từ logs Docker.
@@ -1588,7 +1559,7 @@ def create_main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🔍 Port Check", callback_data="port_check"),
             ],
             [
-                InlineKeyboardButton("🔧 Manage Service", callback_data="service_menu"),
+                InlineKeyboardButton("🔧 Check RPC", callback_data="service_menu"),
                 InlineKeyboardButton("📝 View Logs", callback_data="logs_menu"),
             ],
             [   
@@ -1650,21 +1621,6 @@ def create_components_menu() -> InlineKeyboardMarkup:
         ]
     )
 
-
-def create_service_menu() -> InlineKeyboardMarkup:
-    """Create service management menu"""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    "▶️ Start", callback_data="service_start"), InlineKeyboardButton(
-                    "⏹️ Stop", callback_data="service_stop"), ], [
-                        InlineKeyboardButton(
-                            "🔄 Restart", callback_data="service_restart")], [
-                                InlineKeyboardButton(
-                                    "🔙 Back", callback_data="main_menu")], ])
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command"""
     user_id = update.effective_user.id
@@ -1673,22 +1629,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     welcome_text = (
-        "🚀 **Aztec Node Monitor Bot - Enhanced**\n\n"
-        "Welcome to the enhanced Aztec Node monitoring bot!\n\n"
-        "✨ **New Features:**\n"
-        "• 🎨 ANSI color code parsing\n"
-        "• 🔧 Component-based filtering\n"
-        "• 🎯 Enhanced log analysis\n\n"
-        "📋 **Available Features:**\n"
-        "• 📊 Check service status\n"
-        "• 💻 Monitor system resources\n"
-        "• 📝 View logs by level & component\n"
-        "• 🔧 Manage service remotely\n\n"
-        "Select an option below:"
-    )
+    "🚀 Aztec Node Monitor Bot - Enhanced\n\n"
+    "Welcome to the enhanced Aztec Node monitoring bot!\n\n"
+    "✨ Features:\n"
+    "🎨 ANSI color code parsing\n"
+    "🔧 Component-based filtering\n"
+    "🎯 Enhanced log analysis\n"
+    "🚨 Automatic miss rate alerts\n"
+    "🌐 Real-time network peer tracking\n\n"
+    "📋 Available Options:\n"
+    "📊 Check service status\n"
+    "💻 Monitor system resources\n"
+    "🎯 Validator & peer status\n"
+    "📦 Sync status monitoring\n"
+    "🔍 Port connectivity check\n"
+    "📝 View logs by level & component\n\n"
+    "🔗 Data Sources:\n"
+    "📊 Validator metrics: Dashtec.xyz\n"
+    "🌐 Network peers: Nethermind.io\n"
+    "🐳 Local logs: Docker containers\n\n"
+    "🙏 Special Thanks:\n"
+    "💝 Thank you for trusting our monitoring solution\n"
+    "🌟 Your feedback helps us improve continuously\n"
+    "🤝 Grateful to Dashtec.xyz & Nethermind.io for data APIs\n"
+    "🚀 Thanks to the Aztec Protocol team for the amazing platform\n\n"
+    "💖 We appreciate you choosing our bot!\n"
+    "Hope this tool makes managing your Aztec node effortless.\n\n"
+    "Select an option below:"
+)
+
+
 
     await update.message.reply_text(
-        escape_markdown_v2(welcome_text),  # <- Use escaped text here
+        escape_markdown_v2(welcome_text),
         reply_markup=create_main_menu(),
         parse_mode="MarkdownV2",
     )
@@ -1765,9 +1738,6 @@ async def button_handler(
     elif query.data.startswith("comp_"):
         component = query.data.replace("comp_", "")
         await handle_logs_enhanced(query, component=component)
-    elif query.data.startswith("service_"):
-        await handle_service_action(query, query.data.replace("service_", ""))
-
 async def handle_status(query) -> None:
     """Handle service status check"""
     status = await monitor.get_service_status()
@@ -2129,30 +2099,6 @@ async def version_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Error checking version: {str(e)}")
-
-async def handle_service_action(query, action: str) -> None:
-    """Handle service actions"""
-    actions = {
-        "start": monitor.start_service,
-        "stop": monitor.stop_service,
-        "restart": monitor.restart_service,
-    }
-
-    if action not in actions:
-        text = "🔧 **Service Management**\n\n❌ Invalid action"
-    else:
-        success, message = await actions[action]()
-        icon = "✅" if success else "❌"
-        text = f"🔧 **Service Management**\n\n{icon} {message}"
-
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔙 Back", callback_data="service_menu")]]
-        ),
-        parse_mode="MarkdownV2",
-    )
-
 
 def main():
     """Main function"""
