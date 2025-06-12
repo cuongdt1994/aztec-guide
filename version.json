@@ -1,9 +1,13 @@
 {
-    "version": "0.0.1",
+    "version": "0.0.2",
     "release_date": "2025-06-13",
     "changelog": [
-        "Added version-based update system",
-        "Improved error handling",
-        "Fixed service restart issues"
+        "Code optimization: Removed unused imports and functions",
+        "Cleaned up redundant methods (subprocess_timeout, safe_format_text, safe_edit_message)",
+        "Removed unused variables (__version_info__, recent_immediate_rate)",
+        "Fixed ineffective state management in port check handler",
+        "Improved code maintainability by removing dead code",
+        "Optimized file size and performance",
+        "Enhanced code readability"
     ]
 }

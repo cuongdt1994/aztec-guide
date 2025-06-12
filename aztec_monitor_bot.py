@@ -3,7 +3,6 @@
 # Monitors Aztec validator node service with ANSI color code support
 import asyncio
 import logging
-from math import e
 import os
 import subprocess
 import re
@@ -17,19 +16,14 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 import shlex
-import json
 import aiohttp
-import hashlib
 import shutil
-import sys
 from typing import Dict, Any
-import requests
 from packaging.version import parse as parse_version
 
 load_dotenv()  # Load environment variables from .env file
 # Version information
-__version__ = "0.0.1"
-__version_info__ = (0,0,1)
+__version__ = "0.0.2"
 # Configuration
 BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
 if not BOT_TOKEN:
@@ -51,18 +45,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
-@contextmanager
-def subprocess_timeout(timeout: int = 30):
-    """Context manager for subprocess with timeout handling"""
-    try:
-        yield
-    except subprocess.TimeoutExpired:
-        logger.error("Command timed out after %d seconds", timeout)
-        raise
-    except Exception as e:
-        logger.error("Command failed: %s", str(e))
-        raise
 def parse_timestamp(timestamp_str: str) -> str:
     if not timestamp_str:
         return "Unknown"
@@ -1011,10 +993,6 @@ class AztecMonitor:
             total_epochs = validator_data.get("totalParticipatingEpochs", 0)
             status_icon = "🟢" if status == "Active" else "🔴" if status == "Inactive" else "🟡"
             slashed_icon = "⚠️" if slashed else "✅"    
-            recent_attestations = validator_data.get("recentAttestations", [])
-            recent_success_count = sum(1 for att in recent_attestations if att.get("status") == "Success")
-            recent_total = len(recent_attestations)
-            recent_immediate_rate = (recent_success_count / recent_total * 100) if recent_total > 0 else 0
             recent_epoch_stats = validator_data.get("recentEpochStats", [])
             current_epoch = self.get_current_epoch()
             recent_3d_success = 0
@@ -1032,8 +1010,6 @@ class AztecMonitor:
                     if success > 0 or missed > 0:
                         recent_3d_success += success
                         recent_3d_total += (success + missed)
-            recent_3d_rate = (recent_3d_success / recent_3d_total * 100) if recent_3d_total > 0 else 0
-
             validator_info = f"""
 🎯 Validator Status: {status} {status_icon}
 🏷️ Index: {index}
@@ -1376,7 +1352,6 @@ Please enter a port number (1-65535):"""
         ]),
         parse_mode="MarkdownV2"
     )
-    query.message.chat.data = {"awaiting_port_check": True}
 async def handle_port_check_custom(update: Update, context:ContextTypes.DEFAULT_TYPE) -> None:
     """Handle custom port check input"""
     query = update.callback_query
@@ -1793,43 +1768,6 @@ async def button_handler(
     elif query.data.startswith("service_"):
         await handle_service_action(query, query.data.replace("service_", ""))
 
-
-def safe_format_text(text: str, use_markdown: bool = True) -> str:
-    """
-    Safely format text for Telegram, with fallback to plain text
-    """
-    if not use_markdown:
-        return text
-
-    try:
-        # Escape special characters first
-        escaped = escape_markdown_v2(text)
-        return escaped
-    except Exception:
-        # Return plain text if escaping fails
-        return text
-
-
-async def safe_edit_message(
-    query, text: str, reply_markup=None, use_markdown: bool = True
-):
-    """
-    Safely edit message with automatic fallback to plain text
-    """
-    try:
-        if use_markdown:
-            await query.edit_message_text(
-                text, reply_markup=reply_markup, parse_mode="MarkdownV2"
-            )
-        else:
-            await query.edit_message_text(text, reply_markup=reply_markup)
-    except Exception as e:
-        logger.warning(f"Markdown failed, using plain text: {e}")
-        # Strip markdown formatting and try again
-        plain_text = text.replace("*", "").replace("`", "").replace("\\", "")
-        await query.edit_message_text(plain_text, reply_markup=reply_markup)
-
-
 async def handle_status(query) -> None:
     """Handle service status check"""
     status = await monitor.get_service_status()
@@ -1980,16 +1918,6 @@ def escape_markdown_v2(text: str) -> str:
         text = text.replace(char, f"\\{char}")
 
     return text
-
-
-def safe_markdown_format(text: str) -> str:
-    """
-    Safely format text for Telegram markdown, handling potential parsing issues
-    """
-    # First escape all special characters
-    escaped_text = escape_markdown_v2(text)
-    return escaped_text
-
 
 async def handle_logs_enhanced(
         query,
