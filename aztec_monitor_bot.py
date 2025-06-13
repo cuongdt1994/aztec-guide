@@ -18,12 +18,13 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 import shlex
 import aiohttp
 import shutil
+import sys
 from typing import Dict, Any
 from packaging.version import parse as parse_version
 
 load_dotenv()  # Load environment variables from .env file
 # Version information
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 # Configuration
 BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
 if not BOT_TOKEN:
@@ -70,6 +71,24 @@ class AztecMonitor:
         self.current_version = __version__
         self.remote_version_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/version.json"
         self.remote_file_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
+    async def apply_update(self, new_content: str, new_version: str) -> bool:
+        """Apply update to bot file only, without restarting external services"""
+        try:
+            backup_path = f"{__file__}.backup.v{self.current_version}.{int(time.time())}"
+            shutil.copy2(__file__, backup_path)
+            logger.info(f"Created backup: {backup_path}")
+            with open("aztec_monitor_bot.py", "w", encoding='utf-8') as f:f.write(new_content)
+            logger.info(f"Bot file updated from v{self.current_version} to v{new_version}")
+            return True
+        except Exception as e:
+            logger.error(f"Bot update failed: {e}")
+            try:
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, __file__)
+                    logger.info("Restored from backup after failed update")
+            except Exception as restore_error:
+                logger.error(f"Failed to restore backup: {restore_error}")
+            return False                
     async def check_rpc_health(self, exec_rpc: str, beacon_rpc: str = None) -> Dict[str, Any]:
         """Check RPC and Beacon health"""
         result = {
@@ -474,30 +493,7 @@ class AztecMonitor:
                 }
         except Exception as e:
             logger.error(f"Error checking for updates: {e}")
-            return {"error": str(e)}                            
-    async def apply_update(self, new_content: str, new_version: str) -> bool:
-        """Apply update"""
-        try:
-            backup_path = f"{__file__}.backup.v{self.current_version}.{int(time.time())}"
-            shutil.copy2(__file__, backup_path)
-            logger.info(f"Created backup: {backup_path}")
-            with open("aztec_monitor_bot.py", "w") as f:
-                f.write(new_content)
-            logger.info(f"File updated from v{self.current_version} to v{new_version}")
-            reset_success, reset_output = await self.run_command("systemctl reset-failed aztecrp.service")
-            if reset_success:
-                logger.info("Failed status reset successfully")
-            await asyncio.sleep(2)
-            success, output = await self.run_command("systemctl restart aztecrp.service")
-            if success:
-                logger.info("Service restarted successfully after update")
-                return True
-            else:
-                logger.error(f"Failed to restart service: {output}")
-                return False 
-        except Exception as e:
-            logger.error(f"Update application failed: {e}")
-            return False    
+            return {"error": str(e)}                                
     async def get_service_status(self) -> Dict:
         """Get service status"""
         success, output = await self.run_command(
@@ -2277,6 +2273,9 @@ Please wait while the bot updates and restarts..."""
             if success:
                 final_msg = f"✅ Update Successful!\n\nUpdated from v{current_ver} to v{remote_ver}\nBot restarted with new version."
                 await update.message.reply_text(escape_markdown_v2(final_msg), parse_mode="MarkdownV2")
+                await asyncio.sleep(2)
+                logger.info(f"Restarting bot after update to v{remote_ver}")
+                os.execv(sys.executable, ['python'] + sys.argv)
             else:
                 await update.message.reply_text("❌ Update failed. Check logs for details.")
         elif result.get("error"):
@@ -2286,10 +2285,9 @@ Please wait while the bot updates and restarts..."""
             remote_ver = result["remote_version"]
             msg = f"✅ Already Up to Date\n\nCurrent version: {current_ver}\nRemote version: {remote_ver}"
             await update.message.reply_text(escape_markdown_v2(msg), parse_mode="MarkdownV2")
-            
     except Exception as e:
         logger.error(f"Error in update_aztec_file: {e}")
-        await update.message.reply_text(f"❌ Unexpected error: {str(e)}")
+        await update.message.reply_text(f"❌ An error occurred: {e}")                        
 
 async def version_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Command để xem thông tin version"""

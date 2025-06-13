@@ -1,5 +1,5 @@
 {
-    "version": "0.0.3",
+    "version": "0.0.4",
     "release_date": "2025-06-13",
     "changelog": [
         "🧹 Code optimization: Removed unused imports and functions",
@@ -15,5 +15,6 @@
         "🔒 Improved security by removing potentially risky service management features",
         "📝 Updated documentation and user interface text"
 		"📝 Added check RPC and Beacon"
+		"🐛 Fixed Bot Restart"
     ]
 }
