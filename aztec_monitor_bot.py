@@ -24,7 +24,7 @@ from packaging.version import parse as parse_version
 
 load_dotenv()  # Load environment variables from .env file
 # Version information
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 # Configuration
 BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
 if not BOT_TOKEN:
@@ -73,11 +73,13 @@ class AztecMonitor:
         self.remote_file_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
     async def apply_update(self, new_content: str, new_version: str) -> bool:
         """Apply update to bot file only, without restarting external services"""
+        backup_path = None
         try:
             backup_path = f"{__file__}.backup.v{self.current_version}.{int(time.time())}"
             shutil.copy2(__file__, backup_path)
             logger.info(f"Created backup: {backup_path}")
-            with open("aztec_monitor_bot.py", "w", encoding='utf-8') as f:f.write(new_content)
+            with open(__file__, "w", encoding='utf-8') as f:
+                f.write(new_content)
             logger.info(f"Bot file updated from v{self.current_version} to v{new_version}")
             return True
         except Exception as e:
@@ -2275,7 +2277,7 @@ Please wait while the bot updates and restarts..."""
                 await update.message.reply_text(escape_markdown_v2(final_msg), parse_mode="MarkdownV2")
                 await asyncio.sleep(2)
                 logger.info(f"Restarting bot after update to v{remote_ver}")
-                os.execv(sys.executable, ['python'] + sys.argv)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             else:
                 await update.message.reply_text("❌ Update failed. Check logs for details.")
         elif result.get("error"):
