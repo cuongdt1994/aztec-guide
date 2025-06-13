@@ -64,9 +64,8 @@ class AztecMonitor:
 
     def __init__(self):
         self.service_name = SERVICE_NAME
-        self.is_windows = os.name == "nt"
-        self.last_alert_time = {}  # Lưu thời gian alert cuối
-        self.alert_cooldown = 1800  # 30 phút cooldown
+        self.last_alert_time = {}
+        self.alert_cooldown = 1800
         self.monitoring_active = False
         self.monitor_thread = None
         self.current_version = __version__
@@ -1394,73 +1393,6 @@ class AztecMonitor:
 
 # Global monitor instance
 monitor = AztecMonitor()
-async def start_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command để bắt đầu monitoring"""
-    user_id = update.effective_user.id
-    if not monitor.check_authorization(user_id):
-        await update.message.reply_text("❌ Unauthorized access!")
-        return
-    
-    # Lấy interval từ argument (mặc định 300s = 5 phút)
-    interval = 300
-    if context.args and len(context.args) > 0:
-        try:
-            interval = int(context.args[0])
-            if interval < 60:  # Tối thiểu 1 phút
-                interval = 60
-        except ValueError:
-            await update.message.reply_text("❌ Invalid interval. Using default 300 seconds.")
-    
-    monitor.start_monitoring(interval)
-    
-    text = f"""✅ Monitoring Started
-
-🔍 Miss Rate Alert: > 30%
-⏱️ Check Interval: {interval} seconds ({interval//60} minutes)
-🔕 Alert Cooldown: 30 minutes
-📱 Notification: Telegram
-
-The bot will now automatically monitor your validator's miss rate and send alerts when it exceeds 30%."""
-    
-    escaped_text = escape_markdown_v2(text)
-    await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
-
-async def stop_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command để dừng monitoring"""
-    user_id = update.effective_user.id
-    if not monitor.check_authorization(user_id):
-        await update.message.reply_text("❌ Unauthorized access!")
-        return
-    
-    monitor.stop_monitoring()
-    
-    text = "🛑 Monitoring Stopped\n\nAutomatic miss rate monitoring has been disabled."
-    escaped_text = escape_markdown_v2(text)
-    await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
-
-async def monitor_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command để kiểm tra trạng thái monitoring"""
-    user_id = update.effective_user.id
-    if not monitor.check_authorization(user_id):
-        await update.message.reply_text("❌ Unauthorized access!")
-        return
-    
-    status = "🟢 Active" if monitor.monitoring_active else "🔴 Inactive"
-    
-    text = f"""📊 Monitoring Status
-
-🔍 Status: {status}
-⚠️ Alert Threshold: > 30% miss rate
-🔕 Cooldown: 30 minutes
-📱 Notifications: Telegram
-
-Commands:
-• `/start_monitor [interval]` - Start monitoring
-• `/stop_monitor` - Stop monitoring
-• `/monitor_status` - Check status"""
-    
-    escaped_text = escape_markdown_v2(text)
-    await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
 async def handle_port_check_menu(query) -> None:
     """Handle port check menu"""
     text = """🔍 Port Check Tool
@@ -1579,6 +1511,30 @@ async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f"⏳ Syncing...\n\n🧱 Local: {local}\n🌐 Remote: {remote}\n📈 Progress: {percent}"
 
         await update.message.reply_text( escape_markdown_v2(text), parse_mode="MarkdownV2")
+    elif context.user_data.get("awaiting_monitor_interval"):
+        interval_text = update.message.text.strip()
+        context.user_data["awaiting_monitor_interval"] = False
+        try:
+            interval = int(interval_text)
+            if interval < 60:
+                await update.message.reply_text("❌ Minimum interval is 60 seconds!")
+                return
+            if monitor.monitoring_active:
+                monitor.stop_monitoring()
+            monitor.start_monitoring(interval)
+            success_text = f"""✅ Custom Monitoring Started!
+
+⏱️ Check Interval: {interval} seconds ({interval//60} minutes)
+🔍 Miss Rate Alert: > 30%
+🔕 Alert Cooldown: 30 minutes
+
+Your custom monitoring interval has been applied."""
+            escaped_text = escape_markdown_v2(success_text)
+            await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
+        except ValueError:
+            await update.message.reply_text("❌ Invalid interval! Please enter a valid number in seconds.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error setting interval: {str(e)}")                
     elif context.user_data.get("awaiting_rpc_check"):
         input_text = update.message.text.strip()
         context.user_data["awaiting_rpc_check"] = False
@@ -1768,34 +1724,82 @@ Please wait..."""
         plain_text = text.replace("*", "").replace("`", "").replace("\\", "")
         await query.edit_message_text(plain_text, reply_markup=back_button)
 
-
-def create_main_menu() -> InlineKeyboardMarkup:
-    """Create main menu with port check option"""
+def create_monitor_menu() -> InlineKeyboardMarkup:
+    """Create monitoring control menu"""
+    status_text = "🟢 Stop Monitor" if monitor.monitoring_active else "🔴 Start Monitor"
+    status_callback = "stop_monitor" if monitor.monitoring_active else "start_monitor"
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("📊 Service Status", callback_data="status"),
-                InlineKeyboardButton("💻 System Resources", callback_data="resources"),
+                InlineKeyboardButton("📊 Monitor Status", callback_data="monitor_status"),
+                InlineKeyboardButton(status_text, callback_data=status_callback),
             ],
             [
-                InlineKeyboardButton("🎯 Validator Status", callback_data="validator_status"),
-                InlineKeyboardButton("🌐 Peer Status", callback_data="peer_status"),
+                InlineKeyboardButton("⚙️ Custom Interval", callback_data="monitor_custom"),
+                InlineKeyboardButton("🔔 Test Alert", callback_data="test_alert"),
             ],
-            [
-                InlineKeyboardButton("📦 Sync Status", callback_data="sync_custom"),
-                InlineKeyboardButton("🔍 Port Check", callback_data="port_check"),
-            ],
-            [
-                InlineKeyboardButton("🔗 RPC Health", callback_data="rpc_check"),
-                InlineKeyboardButton("📝 View Logs", callback_data="logs_menu"),
-            ],
-            [   
-                InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
-            ]
+            [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]    
         ]
-    )
+    )    
 
-
+def create_main_menu() -> InlineKeyboardMarkup:
+    """Create simplified main menu with 4 core sections"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 System Status", callback_data="system_menu"),
+            InlineKeyboardButton("🎯 Validator", callback_data="validator_status"),
+        ],
+        [
+            InlineKeyboardButton("🔧 Tools & Logs", callback_data="tools_menu"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu"),
+        ]
+    ])
+def create_system_menu() -> InlineKeyboardMarkup:
+    """Create system monitoring submenu"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Service Status", callback_data="status"),
+            InlineKeyboardButton("💻 Resources", callback_data="resources"),
+        ],
+        [
+            InlineKeyboardButton("📦 Sync Status", callback_data="sync_custom"),
+            InlineKeyboardButton("🌐 Peer Status", callback_data="peer_status"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh All", callback_data="refresh_system"),
+            InlineKeyboardButton("🔙 Back", callback_data="main_menu"),
+        ]
+    ])
+def create_tools_menu() -> InlineKeyboardMarkup:
+    """Create tools and diagnostics submenu"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📝 View Logs", callback_data="logs_menu"),
+            InlineKeyboardButton("🔍 Port Check", callback_data="port_check"),
+        ],
+        [
+            InlineKeyboardButton("🔗 RPC Health", callback_data="rpc_check"),
+            InlineKeyboardButton("📊 Monitor Control", callback_data="monitor_menu"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="main_menu")
+        ]
+    ])
+def create_settings_menu() -> InlineKeyboardMarkup:
+    """Create settings and maintenance submenu"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Version Info", callback_data="version_info"),
+            InlineKeyboardButton("🔄 Check Update", callback_data="check_update"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Bot Settings", callback_data="bot_settings"),
+            InlineKeyboardButton("📊 Statistics", callback_data="bot_stats"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="main_menu")
+        ]
+    ])
 
 def create_logs_menu() -> InlineKeyboardMarkup:
     """Create enhanced logs menu with component filtering"""
@@ -1856,37 +1860,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     welcome_text = (
-    "🚀 Aztec Node Monitor Bot - Enhanced\n\n"
-    "Welcome to the enhanced Aztec Node monitoring bot!\n\n"
-    "✨ Features:\n"
-    "🎨 ANSI color code parsing\n"
-    "🔧 Component-based filtering\n"
-    "🎯 Enhanced log analysis\n"
-    "🚨 Automatic miss rate alerts\n"
-    "🌐 Real-time network peer tracking\n\n"
-    "📋 Available Options:\n"
-    "📊 Check service status\n"
-    "💻 Monitor system resources\n"
-    "🎯 Validator & peer status\n"
-    "📦 Sync status monitoring\n"
-    "🔍 Port connectivity check\n"
-    "📝 View logs by level & component\n\n"
+    "🚀 Aztec Node Monitor Bot\n\n"
+    "Welcome to your simplified Aztec node monitoring dashboard!\n\n"
+    "🎯 Quick Access Categories:\n"
+    "📊 System Status - Monitor core components\n"
+    "🎯 Validator - Check validator performance\n"
+    "🔧 Tools & Logs - Diagnostics and logging\n"
+    "⚙️ Settings - Configuration and updates\n\n"
+    "✨ Key Features:\n"
+    "Real-time monitoring with alerts\n"
+    "Comprehensive logging and diagnostics\n"
+    "Network connectivity testing\n"
+    "Automatic miss rate detection\n\n"
     "🔗 Data Sources:\n"
     "📊 Validator metrics: Dashtec.xyz\n"
     "🌐 Network peers: Nethermind.io\n"
     "🐳 Local logs: Docker containers\n\n"
-    "🙏 Special Thanks:\n"
-    "💝 Thank you for trusting our monitoring solution\n"
-    "🌟 Your feedback helps us improve continuously\n"
-    "🤝 Grateful to Dashtec.xyz & Nethermind.io for data APIs\n"
-    "🚀 Thanks to the Aztec Protocol team for the amazing platform\n\n"
-    "💖 We appreciate you choosing our bot!\n"
-    "Hope this tool makes managing your Aztec node effortless.\n\n"
-    "Select an option below:"
+    "🙏 Thanks to Dashtec.xyz & Nethermind.io for APIs\n"
+    "💖 Thank you for choosing our monitoring solution!\n\n"
+    "Select a category to get started:"
 )
-
-
-
     await update.message.reply_text(
         escape_markdown_v2(welcome_text),
         reply_markup=create_main_menu(),
@@ -1913,6 +1906,39 @@ async def button_handler(
             reply_markup=create_main_menu(),
             parse_mode="MarkdownV2",
         )
+    elif query.data == "system_menu":
+        text = """📊 *System Monitoring*
+
+Monitor your Aztec node's core components and performance metrics\.
+
+Select an option:"""
+        await query.edit_message_text(
+            text,
+            reply_markup=create_system_menu(),
+            parse_mode="MarkdownV2",
+        )
+    elif query.data == "tools_menu":
+        text = """🔧 *Tools & Diagnostics*
+
+Access logging, network diagnostics, and monitoring tools\.
+
+Select an option:"""
+        await query.edit_message_text(
+            text,
+            reply_markup=create_tools_menu(),
+            parse_mode="MarkdownV2",
+        )
+    elif query.data == "settings_menu":
+        text = """⚙️ *Settings & Maintenance*
+
+Manage bot configuration, updates, and system information\.
+
+Select an option:"""
+        await query.edit_message_text(
+            text,
+            reply_markup=create_settings_menu(),
+            parse_mode="MarkdownV2",
+        )
     elif query.data == "status":
         await handle_status(query)
     elif query.data == "resources":
@@ -1926,7 +1952,25 @@ async def button_handler(
     elif query.data == "rpc_check":
         await handle_rpc_check_custom(update, context)        
     elif query.data == "sync_custom":
-        await handle_sync_status_custom(update, context)      
+        await handle_sync_status_custom(update, context)
+    elif query.data == "version_info":
+        await handle_version_info(query)
+    elif query.data == "check_update":
+        await handle_check_update(query)
+    elif query.data == "apply_update":
+        await handle_apply_update(query, context)
+    elif query.data == "monitor_menu":
+        await handle_monitor_menu(query)
+    elif query.data == "monitor_status":
+        await handle_monitor_status(query)
+    elif query.data == "start_monitor":
+        await handle_start_monitor(query, context)
+    elif query.data == "stop_monitor":
+        await handle_stop_monitor(query)
+    elif query.data == "monitor_custom":
+        await handle_monitor_custom(query, context)
+    elif query.data == "test_alert":
+        await handle_test_alert(query)                      
     elif query.data == "logs_menu":
         text = (
             "📝 Enhanced Logs Menu\n\n"
@@ -1967,6 +2011,427 @@ async def button_handler(
     elif query.data.startswith("comp_"):
         component = query.data.replace("comp_", "")
         await handle_logs_enhanced(query, component=component)
+async def handle_version_info(query) -> None:
+    """Handle version info display"""
+    loading_msg = "🔍 Checking version information...\n⏳ Please wait..."
+    await query.edit_message_text(loading_msg, reply_markup=None)
+    try:
+        remote_version = await monitor.get_remote_version()
+        if not remote_version:
+            remote_version = await monitor.get_remote_version_from_code()
+        current_parsed = parse_version(__version__)
+        remote_parsed = parse_version(remote_version) if remote_version else None
+        status = "🟢 Up to date"
+        update_available = False
+        if remote_parsed and remote_parsed > current_parsed:
+            status = "🟡 Update available"
+            update_available = True
+        elif not remote_version:
+            status = "🔴 Cannot check remote"
+        version_text = f"""📦 Version Information
+        🏷️ Current Version: {__version__}
+🌐 Remote Version: {remote_version or 'Unknown'}
+📊 Status: {status}
+
+⏰ Last Check: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}"""
+        buttons = []
+        if update_available:
+            buttons.append([
+                InlineKeyboardButton("🔄 Update Now", callback_data="apply_update"),
+                InlineKeyboardButton("🔍 Check Again", callback_data="version_info")
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton("🔍 Check Again", callback_data="version_info")
+            ])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="main_menu")])
+        reply_markup = InlineKeyboardMarkup(buttons)
+        escaped_text = escape_markdown_v2(version_text)
+        await query.edit_message_text(
+            escaped_text,
+            reply_markup=reply_markup,
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        error_text = f"❌ Error checking version: {str(e)}"
+        await query.edit_message_text(
+            error_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+            ])
+        )
+async def handle_refresh_system(query) -> None:
+    """Handle comprehensive system refresh"""
+    loading_msg = """🔄 *System Refresh*
+
+⏳ Checking service status\.\.\.
+⏳ Gathering system resources\.\.\.
+⏳ Validating sync status\.\.\.
+⏳ Checking peer connectivity\.\.\.
+
+Please wait\.\.\."""
+    await query.edit_message_text(loading_msg, parse_mode="MarkdownV2")
+    try:
+        service_status = await monitor.get_service_status()
+        resources = monitor.get_system_resources()
+        sync_status = await monitor.get_sync_status()
+        peer_status = await monitor.get_peer_status()
+        service_icon = "🟢" if service_status["active"] else "🔴"
+        cpu_icon = "🟢" if resources["cpu"]["percent"] < 70 else "🟡" if resources["cpu"]["percent"] < 90 else "🔴"
+        sync_icon = "🟢" if sync_status.get("synced") else "🔴"
+        peer_icon = "🟢" if peer_status.get("peer_found") else "🔴"
+        summary_text = f"""✅ *System Refresh Complete*
+
+📊 *Quick Status Overview:*
+
+{service_icon} Service: {'Running' if service_status['active'] else 'Stopped'}
+{cpu_icon} CPU: {resources['cpu']['percent']:.1f}%
+{sync_icon} Sync: {'Synced' if sync_status.get('synced') else 'Syncing'}
+{peer_icon} Peer: {'Connected' if peer_status.get('peer_found') else 'Not Found'}
+
+⏰ Updated: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+
+Select a component for detailed information:"""
+        await query.edit_message_text(
+            summary_text,
+            reply_markup=create_system_menu(),
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        error_text = f"❌ *Refresh Error*\n\n{escape_markdown_v2(str(e))}"
+        await query.edit_message_text(
+            error_text,
+            reply_markup=create_system_menu(),
+            parse_mode="MarkdownV2"
+        )
+def create_bot_settings_menu() -> InlineKeyboardMarkup:
+    """Create bot configuration submenu"""
+    monitor_status = "🟢 Active" if monitor.monitoring_active else "🔴 Inactive"
+    
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"📊 Monitor: {monitor_status}", callback_data="toggle_monitor"),
+            InlineKeyboardButton("⏱️ Intervals", callback_data="monitor_intervals"),
+        ],
+        [
+            InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings"),
+            InlineKeyboardButton("📊 Log Levels", callback_data="log_settings"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="settings_menu")
+        ]
+    ])
+
+async def handle_bot_settings(query) -> None:
+    """Handle bot settings menu"""
+    text = """⚙️ *Bot Configuration*
+
+Configure monitoring, notifications, and logging preferences\.
+
+Current Settings:
+• Monitor Status: """ + ("🟢 Active" if monitor.monitoring_active else "🔴 Inactive") + """
+• Check Interval: 300 seconds
+• Alert Threshold: > 30% miss rate
+• Log Level: INFO
+
+Select an option:"""
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=create_bot_settings_menu(),
+        parse_mode="MarkdownV2"
+    )
+                   
+async def handle_check_update(query) -> None:
+    """Handle update check"""
+    loading_msg = """🔍 Checking for updates...
+
+⏳ Fetching remote version...
+⏳ Comparing versions...
+⏳ Preparing update info...
+
+Please wait..."""
+    await query.edit_message_text(loading_msg, reply_markup=None)
+    try:
+        result = await monitor.check_for_updates()
+        if result.get("update_available"):
+            current_ver = result["current_version"]
+            remote_ver = result["remote_version"]
+            update_text = f"""🔄 Update Available!
+
+📦 Current Version: {current_ver}
+🆕 New Version: {remote_ver}
+🔄 Version Comparison: {result.get('version_comparison', 'N/A')}
+
+✨ Ready to update your bot to the latest version!
+
+⚠️ Note: Bot will restart after update"""
+            buttons = [
+                [
+                    InlineKeyboardButton("✅ Update Now", callback_data="apply_update"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="main_menu")
+                ],
+                [InlineKeyboardButton("🔍 Check Again", callback_data="check_update")]
+            ]
+        elif result.get("error"):
+            update_text = f"❌ Update Check Error\n\n{result['error']}"
+            buttons = [
+                [
+                    InlineKeyboardButton("🔄 Retry", callback_data="check_update"),
+                    InlineKeyboardButton("🔙 Back", callback_data="main_menu")
+                ]
+            ]
+        else:
+            current_ver = result["current_version"]
+            remote_ver = result["remote_version"]
+            update_text = f"""✅ Already Up to Date
+
+📦 Current Version: {current_ver}
+🌐 Remote Version: {remote_ver}
+📊 Status: Latest version installed
+
+Your bot is running the most recent version available."""
+            buttons = [
+                [
+                    InlineKeyboardButton("🔍 Check Again", callback_data="check_update"),
+                    InlineKeyboardButton("🔙 Back", callback_data="main_menu")
+                ]
+            ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+        escaped_text = escape_markdown_v2(update_text)
+        await query.edit_message_text(
+            escaped_text,
+            reply_markup=reply_markup,
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        error_text = f"❌ Error checking for updates: {str(e)}"
+        await query.edit_message_text(
+            error_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+            ])
+        )
+async def handle_apply_update(query, context) -> None:
+    """Handle update application"""
+    updating_msg = """🔄 Applying Update...
+
+⏳ Downloading new version...
+⏳ Creating backup...
+⏳ Applying changes...
+
+Please wait, do not close the bot..."""
+    await query.edit_message_text(updating_msg, reply_markup=None)
+    try:
+        result = await monitor.check_for_updates()
+        if result.get("update_available"):
+            current_ver = result["current_version"]
+            remote_ver = result["remote_version"]
+            success = await monitor.apply_update(result["remote_content"], remote_ver)
+            if success:
+                final_msg = f"""✅ Update Successful!
+
+📦 Updated: v{current_ver} → v{remote_ver}
+🔄 Bot will restart in 3 seconds...
+
+Thank you for keeping your bot updated!"""
+                escaped_msg = escape_markdown_v2(final_msg)
+                await query.edit_message_text(escaped_msg, parse_mode="MarkdownV2")
+                await asyncio.sleep(3)
+                logger.info(f"Restarting bot after update to v{remote_ver}")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                error_msg = """❌ Update Failed
+
+The update process encountered an error.
+Your bot is still running the previous version.
+Check logs for more details."""
+                await query.edit_message_text(
+                    error_msg,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+                    ])
+                )
+        else:
+            await query.edit_message_text(
+                "❌ No update available",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+                ])
+            )
+    except Exception as e:
+        error_msg = f"❌ Update error: {str(e)}"
+        await query.edit_message_text(
+            error_msg,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+            ])
+        )
+async def handle_monitor_menu(query) -> None:
+    """Handle monitor menu display"""
+    status = "🟢 Active" if monitor.monitoring_active else "🔴 Inactive"
+    
+    menu_text = f"""📊 Monitoring Control Panel
+
+🔍 Status: {status}
+⚠️ Alert Threshold: > 30% miss rate
+🔕 Cooldown: 30 minutes
+📱 Notifications: Telegram
+
+Select an option below:"""
+    escaped_text = escape_markdown_v2(menu_text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=create_monitor_menu(),
+        parse_mode="MarkdownV2"
+    )
+async def handle_monitor_status(query) -> None:
+    """Handle monitor status display"""
+    status = "🟢 Active" if monitor.monitoring_active else "🔴 Inactive"
+    
+    status_text = f"""📊 Monitoring Status Report
+
+🔍 Status: {status}
+⚠️ Alert Threshold: > 30% miss rate
+🔕 Cooldown: 30 minutes
+📱 Notifications: Telegram
+⏰ Last Check: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+
+🎯 Monitoring Features:
+• Automatic miss rate detection
+• Real-time Telegram alerts
+• Configurable check intervals
+• Smart cooldown system"""
+    escaped_text = escape_markdown_v2(status_text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )                                
+async def handle_start_monitor(query, context) -> None:
+    """Handle start monitoring"""
+    if monitor.monitoring_active:
+        await query.edit_message_text(
+            "⚠️ Monitoring is already active!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+            ])
+        )
+        return
+    monitor.start_monitoring(300)
+    
+    success_text = """✅ Monitoring Started!
+
+🔍 Miss Rate Alert: > 30%
+⏱️ Check Interval: 300 seconds (5 minutes)
+🔕 Alert Cooldown: 30 minutes
+📱 Notification: Telegram
+
+The bot will now automatically monitor your validator's miss rate."""
+    
+    escaped_text = escape_markdown_v2(success_text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )
+async def handle_stop_monitor(query) -> None:
+    """Handle stop monitoring"""
+    if not monitor.monitoring_active:
+        await query.edit_message_text(
+            "⚠️ Monitoring is not active!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+            ])
+        )
+        return
+    
+    monitor.stop_monitoring()
+    
+    stop_text = """🛑 Monitoring Stopped
+
+Automatic miss rate monitoring has been disabled.
+You can restart it anytime from the monitor menu."""
+    
+    escaped_text = escape_markdown_v2(stop_text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )
+
+async def handle_monitor_custom(query, context) -> None:
+    """Handle custom monitor interval setup"""
+    text = """⚙️ Custom Monitor Interval
+
+Enter the monitoring interval in seconds.
+
+Examples:
+• `60` - Check every 1 minute
+• `300` - Check every 5 minutes (default)
+• `600` - Check every 10 minutes
+• `1800` - Check every 30 minutes
+
+Minimum interval: 60 seconds
+Please enter interval in seconds:"""
+    
+    escaped_text = escape_markdown_v2(text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )
+    context.user_data["awaiting_monitor_interval"] = True
+
+async def handle_test_alert(query) -> None:
+    """Handle test alert"""
+    test_msg = """🔔 Sending Test Alert...
+
+This will send a test notification to verify your alert system is working correctly."""
+    
+    await query.edit_message_text(test_msg, reply_markup=None)
+    
+    # Create a test alert
+    test_alert_data = {
+        "alert": True,
+        "miss_rate": 35.5,
+        "total_attestations": 100,
+        "missed_attestations": 35,
+        "validator_data": {
+            "index": "TEST",
+            "address": "0x1234567890abcdef1234567890abcdef12345678"
+        }
+    }
+    
+    success = await monitor.send_miss_rate_alert(test_alert_data)
+    
+    if success:
+        result_text = """✅ Test Alert Sent Successfully!
+
+Check your Telegram for the test alert message.
+If you received it, your monitoring system is working correctly."""
+    else:
+        result_text = """❌ Test Alert Failed
+
+There was an issue sending the test alert.
+Please check your bot configuration and try again."""
+    
+    escaped_text = escape_markdown_v2(result_text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="monitor_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )        
 async def handle_status(query) -> None:
     """Handle service status check"""
     status = await monitor.get_service_status()
@@ -2246,91 +2711,6 @@ async def handle_logs_enhanced(
         # Remove all markdown formatting for plain text
         plain_text = text.replace("*", "").replace("`", "").replace("\\", "")
         await query.edit_message_text(plain_text, reply_markup=back_menu)
-
-async def update_aztec_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not monitor.check_authorization(user_id):
-        await update.message.reply_text("❌ Unauthorized access!")
-        return
-
-    await update.message.reply_text("🔍 Checking for updates...")
-    
-    try:
-        result = await monitor.check_for_updates()
-        
-        if result.get("update_available"):
-            current_ver = result["current_version"]
-            remote_ver = result["remote_version"]
-            
-            update_msg = f"""🔄 Update Available!
-
-📦 Current Version: {current_ver}
-🆕 New Version: {remote_ver}
-🔄 Updating...
-
-Please wait while the bot updates and restarts..."""
-            
-            await update.message.reply_text(escape_markdown_v2(update_msg), parse_mode="MarkdownV2")
-            
-            success = await monitor.apply_update(result["remote_content"], remote_ver)
-            if success:
-                final_msg = f"✅ Update Successful!\n\nUpdated from v{current_ver} to v{remote_ver}\nBot restarted with new version."
-                await update.message.reply_text(escape_markdown_v2(final_msg), parse_mode="MarkdownV2")
-                await asyncio.sleep(2)
-                logger.info(f"Restarting bot after update to v{remote_ver}")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            else:
-                await update.message.reply_text("❌ Update failed. Check logs for details.")
-        elif result.get("error"):
-            await update.message.reply_text(f"❌ Error: {result['error']}")
-        else:
-            current_ver = result["current_version"]
-            remote_ver = result["remote_version"]
-            msg = f"✅ Already Up to Date\n\nCurrent version: {current_ver}\nRemote version: {remote_ver}"
-            await update.message.reply_text(escape_markdown_v2(msg), parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"Error in update_aztec_file: {e}")
-        await update.message.reply_text(f"❌ An error occurred: {e}")                        
-
-async def version_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Command để xem thông tin version"""
-    user_id = update.effective_user.id
-    if not monitor.check_authorization(user_id):
-        await update.message.reply_text("❌ Unauthorized access!")
-        return
-    
-    try:
-        remote_version = await monitor.get_remote_version()
-        if not remote_version:
-            remote_version = await monitor.get_remote_version_from_code()
-        
-        current_parsed = parse_version(__version__)
-        remote_parsed = parse_version(remote_version) if remote_version else None
-        
-        status = "🟢 Up to date"
-        if remote_parsed and remote_parsed > current_parsed:
-            status = "🟡 Update available"
-        elif not remote_version:
-            status = "🔴 Cannot check remote"
-        
-        version_text = f"""📦 Version Information
-
-🏷️ Current Version: {__version__}
-🌐 Remote Version: {remote_version or 'Unknown'}
-📊 Status: {status}
-
-⏰ Last Check: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
-
-Commands:
-• `/version` - Check version info
-• `/update_aztec` - Update if available"""
-        
-        escaped_text = escape_markdown_v2(version_text)
-        await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error checking version: {str(e)}")
-
 def main():
     """Main function"""
     if not BOT_TOKEN:
@@ -2344,11 +2724,6 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_input))
-    application.add_handler(CommandHandler("start_monitor", start_monitor))
-    application.add_handler(CommandHandler("stop_monitor", stop_monitor))
-    application.add_handler(CommandHandler("monitor_status", monitor_status))
-    application.add_handler(CommandHandler("update_aztec", update_aztec_file))
-    application.add_handler(CommandHandler("version", version_info))
     logger.info("Enhanced Aztec Monitor Bot started with automatic monitoring...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
