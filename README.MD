@@ -26,7 +26,7 @@ A comprehensive automation script for installing and configuring Aztec blockchai
 
 # Download script
 
-wget -O aztec-node.sh "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/main/Aztec%20Service%20Node/aztec-node.sh"
+wget -O aztec-node.sh "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec-node.sh"
 
 # Approve Permissions
 
@@ -144,20 +144,10 @@ sudo systemctl status aztecrp.service
 - ✅ Check system logs for errors
 
 ### Common Issues:
-- **"Unauthorized"**: Wrong BOT_TOKEN
-- **"Forbidden"**: User ID not in AUTHORIZED_USERS
-- **"Connection Error"**: Network/firewall issues
-- **"Module not found"**: Python dependencies missing
-
-## 📁 File Structure
-
-After installation, you'll have:
-
-/root/aztecrp/
-├── .env # Environment variables
-├── aztec_monitor_bot.py # Main bot script
-├── startbot.sh # Startup script
-└── venv/ # Python virtual environment
+- **Unauthorized**: Wrong BOT_TOKEN
+- **Forbidden**: User ID not in AUTHORIZED_USERS
+- **Connection Error**: Network/firewall issues
+- **Module not found**: Python dependencies missing
 
 ## 🔒 Security Notes
 
