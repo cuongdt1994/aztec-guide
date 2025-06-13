@@ -1,165 +1,167 @@
-# Aztec Node Setup Script
+# 🚀 Aztec Node & Monitor Bot Setup Guide
 
-A comprehensive automation script for installing and configuring Aztec blockchain node on Ubuntu with systemctl support and environment variables management.
+This repository provides automation scripts to easily install and manage an Aztec blockchain node along with a monitoring bot that reports node status via Telegram.
 
-## 🚀 Features
+---
 
-- **Automated Installation**: System updates and all required dependencies installation
-- **Docker Integration**: Docker CE installation with optimized configuration
-- **Environment Management**: Secure .env file configuration with high security
-- **Systemd Service**: Integrated systemctl for automatic service management
-- **Interactive Setup**: User-friendly input interface with validation
-- **Security First**: Hidden private key input and restricted .env file permissions
-- **Auto IP Detection**: Automatic public IP detection for P2P networking
+## 📦 Components
 
-## 📋 System Requirements
+1. **Aztec Node Setup Script**
+2. **Aztec Monitor Bot** (Telegram-based monitoring)
+3. **Systemd Services** for automatic startup & management
 
-- **OS**: Ubuntu 20.04+ or Debian 11+
-- **RAM**: Minimum 4GB, recommended 8GB+
-- **Storage**: Minimum 100GB SSD
-- **Network**: Stable internet connection
-- **User**: Account with sudo privileges (do not run as root)
+---
 
-## 🛠️ Quick Installation
+## 🖥️ System Requirements
 
-### Step 1: Download Script and Run Installation
+| Requirement | Description |
+|-------------|-------------|
+| **OS** | Ubuntu 20.04+ or Debian 11+ |
+| **RAM** | Minimum: 4GB / Recommended: 8GB+ |
+| **Storage** | Minimum: 100GB SSD |
+| **Network** | Stable internet connection |
+| **User Access** | Sudo privileges required (Do NOT run as root directly) |
 
-# Download script
+---
 
+## 1️⃣ Aztec Node Installation
+
+### 🔧 Step-by-Step Instructions
+
+```bash
+# Download the setup script
 wget -O aztec-node.sh "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec-node.sh"
 
-# Approve Permissions
-
+# Make it executable
 chmod +x aztec-node.sh
 
-# Running with permissions root
-
+# Run the script with sudo
 sudo ./aztec-node.sh
+```
 
-### Step 2: Download Script and Run Installation Aztec Monitor Bot
+📌 During installation:
+- Installs required packages and Docker
+- Creates `.env` file with secure permissions
+- Configures public IP for P2P
+- Sets up `systemd` service to run the node
 
-# Aztec Monitor Bot Installation Guide
+---
 
-## 📋 Prerequisites
+## 2️⃣ Aztec Monitor Bot Installation
 
-Before running the installation script, you need to:
-1. Create a Telegram Bot
-2. Get your Telegram User ID
-3. Have root/sudo access on your Linux server
+Monitor the status of your Aztec node via Telegram.
 
-## 🤖 Telegram Bot Creation Guide
+### 📋 Prerequisites
 
-### Step 1: Create Your Bot with BotFather
+- Telegram account
+- Bot Token (from BotFather)
+- Your Telegram User ID
 
-1. **Open Telegram** on your phone or computer
-2. **Search for `@BotFather`** in the search bar
-3. **Start conversation** by clicking "Start" button
-4. **Create new bot** by sending command: `/newbot`
-5. **Follow BotFather's instructions:**
-   - Enter display name for your bot (e.g., "Aztec Monitor Bot")
-   - Enter username for your bot (must end with "bot", e.g., "aztec_monitor_bot")
-6. **Save the BOT TOKEN** - BotFather will provide a token like: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
+### 🤖 Create Telegram Bot
 
-### Step 2: Get Your Telegram User ID
+1. Open Telegram and search for `@BotFather`
+2. Start a chat and send `/newbot`
+3. Follow the prompts to name your bot and get the **Bot Token**
 
-**Method 1: Using @userinfobot (Recommended)**
-1. Search for `@userinfobot` in Telegram
-2. Start conversation and send any message
-3. The bot will reply with your user information
-4. Copy the "Id" number (e.g., `123456789`)
+### 🆔 Get Your Telegram User ID
 
-**Method 2: Using Telegram API**
-1. Send a message to your newly created bot
-2. Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-3. Replace `<YOUR_BOT_TOKEN>` with your actual bot token
-4. Look for `"from":{"id": YOUR_USER_ID}` in the response
+#### ✅ Option 1 (Recommended)
+- Search for `@userinfobot` in Telegram
+- Start the bot → It shows your **User ID**
 
-### Step 3: Multiple Users (Optional)
-- Each user who wants to use the bot needs their own User ID
-- Get User IDs using the same methods above
-- Separate multiple IDs with commas: `123456789,987654321,555666777`
+#### 🔍 Option 2 (API method)
+1. Send a message to your bot
+2. Open browser and go to:  
+   `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+3. Find your User ID in the response:  
+   `"from":{"id": YOUR_USER_ID}`
 
-## 🚀 Installation
+---
 
-1. **Download and run the installation script:**
+### ⚙️ Bot Installation
 
+```bash
+# Download monitor bot installer
 wget https://raw.githubusercontent.com/cuongdt1994/aztec-guide/main/install_aztec_bot.sh
+
+# Make it executable
 chmod +x install_aztec_bot.sh
+
+# Run with sudo
 sudo ./install_aztec_bot.sh
+```
 
-2. **Enter your credentials when prompted:**
-- `AZTEC_BOT_TOKEN`: Your bot token from BotFather
-- `AZTEC_AUTHORIZED_USERS`: Your User ID(s) from @userinfobot
+During setup, you'll be prompted for:
 
-## 🔧 Service Management
+- `AZTEC_BOT_TOKEN` → BotFather token
+- `AZTEC_AUTHORIZED_USERS` → Comma-separated list of User IDs
 
-After installation, use these commands to manage your bot:
+---
 
-Start the service
+## 🛠️ Service Management
+
+### Aztec Bot Service (`aztecrp.service`)
+
+| Command | Purpose |
+|---------|---------|
+| `sudo systemctl start aztecrp.service` | Start the bot |
+| `sudo systemctl stop aztecrp.service` | Stop the bot |
+| `sudo systemctl restart aztecrp.service` | Restart the bot |
+| `sudo systemctl status aztecrp.service` | View current status |
+| `sudo journalctl -u aztecrp.service -f` | Live view logs |
+
+---
+
+## ✅ Test Your Setup
+
+1. Start the bot service:
+```bash
 sudo systemctl start aztecrp.service
+```
 
-Stop the service
-sudo systemctl stop aztecrp.service
-
-Check service status
+2. Check service is running:
+```bash
 sudo systemctl status aztecrp.service
+```
 
-View real-time logs
+3. Open Telegram and send `/status` to your bot
+
+If configured correctly, it should reply with system/node status.
+
+---
+
+## 🧰 Troubleshooting
+
+| Problem | Solution |
+|--------|----------|
+| Bot doesn't respond | ✅ Check bot token and authorized user ID |
+| Service won't start | ✅ Ensure virtualenv and Python deps are installed |
+| `Forbidden` error | ✅ User ID is not authorized |
+| `Module not found` | ✅ Reinstall dependencies |
+
+Check logs for more info:
+```bash
 sudo journalctl -u aztecrp.service -f
+```
 
-Restart the service
-sudo systemctl restart aztecrp.service
+---
 
-Disable auto-start on boot
-sudo systemctl disable aztecrp.service
+## 🔐 Security Notes
 
-## 🧪 Testing Your Bot
+- Bot runs as root to monitor system/node
+- Only authorized Telegram users can interact
+- Credentials stored in `/root/aztecrp/.env` (permission restricted)
+- Services auto-start on system boot
 
-1. **Start the service:**
-
-sudo systemctl start aztecrp.service
-
-2. **Check if running:**
-
-sudo systemctl status aztecrp.service
-
-
-3. **Test in Telegram:**
-- Open your bot in Telegram
-- Send a command like `/status`
-- Bot should respond if everything is working
-
-## 🔍 Troubleshooting
-
-### Bot doesn't respond?
-- ✅ Verify BOT_TOKEN is correct
-- ✅ Ensure your User ID is in AUTHORIZED_USERS
-- ✅ Check service logs: `sudo journalctl -u aztecrp.service -f`
-- ✅ Confirm bot script downloaded correctly
-
-### Service won't start?
-- ✅ Check Python virtual environment is created
-- ✅ Verify all dependencies are installed
-- ✅ Ensure proper file permissions
-- ✅ Check system logs for errors
-
-### Common Issues:
-- **Unauthorized**: Wrong BOT_TOKEN
-- **Forbidden**: User ID not in AUTHORIZED_USERS
-- **Connection Error**: Network/firewall issues
-- **Module not found**: Python dependencies missing
-
-## 🔒 Security Notes
-
-- Bot runs as root user (required for system monitoring)
-- Only authorized users can interact with the bot
-- Bot token and user IDs are stored in `/root/aztecrp/.env`
-- Service auto-starts on system boot
+---
 
 ## 📞 Support
 
-If you encounter issues:
-1. Check the troubleshooting section above
-2. Review service logs for error messages
-3. Ensure all prerequisites are met
-4. Verify network connectivity and permissions
+If you face issues:
+
+- ✅ Recheck all installation steps
+- ✅ Check systemctl & journalctl logs
+- ✅ Ensure valid Telegram token and ID
+- ✅ Verify internet access and firewall rules
+
+Happy Node Running 🚀
