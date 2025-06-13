@@ -17,10 +17,10 @@ This repository provides automation scripts to easily install and manage an Azte
 | Requirement | Description |
 |-------------|-------------|
 | **OS** | Ubuntu 20.04+ or Debian 11+ |
-| **RAM** | Minimum: 4GB / Recommended: 8GB+ |
+| **RAM** | Minimum: 16GB / Recommended: 16GB+ |
 | **Storage** | Minimum: 100GB SSD |
 | **Network** | Stable internet connection |
-| **User Access** | Sudo privileges required (Do NOT run as root directly) |
+| **User Access** | Sudo privileges required |
 
 ---
 
