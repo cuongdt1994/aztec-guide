@@ -23,7 +23,7 @@ from packaging.version import parse as parse_version
 
 load_dotenv()  # Load environment variables from .env file
 # Version information
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 # Configuration
 BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
 if not BOT_TOKEN:
@@ -70,6 +70,168 @@ class AztecMonitor:
         self.current_version = __version__
         self.remote_version_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/version.json"
         self.remote_file_url="https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
+    async def check_rpc_health(self, exec_rpc: str, beacon_rpc: str = None) -> Dict[str, Any]:
+        """Check RPC and Beacon health"""
+        result = {
+            "success": False,
+            "exec_rpc": exec_rpc,
+            "beacon_rpc": beacon_rpc,
+            "exec_status": {"healthy": False, "block_number": None, "http_code": None},
+            "beacon_status": {"healthy": False, "version": None, "http_code": None, "head_slot": None},
+            "blob_status": {"success_rate": 0, "total_blobs": 0, "errors": 0},
+            "message": ""
+        }
+    
+        try:
+            exec_payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_blockNumber",
+                "params": [],
+                "id": 1
+            }
+        
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                try:
+                    async with session.post(exec_rpc, json=exec_payload) as response:
+                        result["exec_status"]["http_code"] = response.status
+                        if response.status == 200:
+                            data = await response.json()
+                            block_hex = data.get("result")
+                            if block_hex:
+                                block_number = int(block_hex, 16)
+                                result["exec_status"]["healthy"] = True
+                                result["exec_status"]["block_number"] = block_number
+                            else:
+                                result["exec_status"]["healthy"] = False
+                        else:
+                            result["exec_status"]["healthy"] = False
+                except Exception as e:
+                    logger.error(f"Error checking Exec RPC: {e}")
+                    result["exec_status"]["healthy"] = False
+                    result["exec_status"]["http_code"] = "unreachable"
+            
+                if beacon_rpc:
+                    try:
+                        version_url = f"{beacon_rpc}/eth/v1/node/version"
+                        async with session.get(version_url) as response:
+                            result["beacon_status"]["http_code"] = response.status
+                            if response.status == 200:
+                                data = await response.json()
+                                version = data.get("data", {}).get("version")
+                                if version:
+                                    result["beacon_status"]["healthy"] = True
+                                    result["beacon_status"]["version"] = version
+                                
+                                    head_url = f"{beacon_rpc}/eth/v1/beacon/headers/head"
+                                    async with session.get(head_url) as head_response:
+                                        if head_response.status == 200:
+                                            head_data = await head_response.json()
+                                            head_slot = head_data.get("data", {}).get("header", {}).get("message", {}).get("slot")
+                                            if head_slot:
+                                                result["beacon_status"]["head_slot"] = int(head_slot)
+                                                await self._check_blob_sidecars(session, beacon_rpc, int(head_slot), result)
+                                            else:
+                                                result["beacon_status"]["healthy"] = False
+                                        else:
+                                            result["beacon_status"]["healthy"] = False
+                    except Exception as e:
+                        logger.error(f"Beacon RPC error: {e}")
+                        result["beacon_status"]["healthy"] = False
+                        result["beacon_status"]["http_code"] = "unreachable"
+        
+            result["message"] = self._format_rpc_health_message(result)
+            result["success"] = True
+        
+        except Exception as e:
+            logger.error(f"RPC health check error: {e}")
+            result["message"] = f"❌ Error checking RPC health: {str(e)}"
+        return result                                                 
+
+    async def _check_blob_sidecars(self, session, beacon_rpc: str, head_slot: int, result: Dict):
+        """Check blob sidecars"""
+        total_slots = 10
+        slots_with_blobs = 0
+        total_blobs = 0
+        errors = 0
+        for i in range(total_slots):
+            slot = head_slot - i
+            try:
+                blob_url = f"{beacon_rpc}/eth/v1/beacon/blob_sidecars/{slot}"
+                async with session.get(blob_url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        blob_count = len(data.get("data", []))
+                        if blob_count > 0:
+                            slots_with_blobs += 1
+                            total_blobs += blob_count
+                        elif response.status == 404:
+                            pass
+                        else:
+                            errors += 1
+            except Exception:
+                errors += 1
+        success_rate = (slots_with_blobs / total_slots) * 100 if total_slots > 0 else 0
+        result["blob_status"] = {
+        "success_rate": success_rate,
+        "total_blobs": total_blobs,
+        "errors": errors,
+        "slots_checked": total_slots,
+        "slots_with_blobs": slots_with_blobs
+        }
+    def _format_rpc_health_message(self, result: Dict) -> str:
+        """Format RPC health message"""
+        exec_status = result["exec_status"]
+        beacon_status = result["beacon_status"]
+        blob_status = result["blob_status"]
+        message_parts = []
+        blob_line = ""
+        blob_details = ""
+        if exec_status["healthy"]:
+            exec_line = f"✅ Execution RPC: Healthy (Block: {exec_status['block_number']})"
+        else:
+            http_code = exec_status.get("http_code", "unknown")
+            exec_line = f"❌ Execution RPC: Unhealthy (HTTP: {http_code})"
+        if result["beacon_rpc"]:
+            if beacon_status["healthy"]:
+                version = beacon_status.get("version", "unknown")
+                beacon_line = f"✅ Beacon RPC: Healthy (Version: {version})"
+                if beacon_status.get("head_slot"):
+                    success_rate = blob_status["success_rate"]
+                    if success_rate >= 75:
+                        blob_icon = "🟢"
+                        blob_status_text = "HEALTHY"
+                    elif success_rate >= 25:
+                        blob_icon = "🟡"
+                        blob_status_text = "WARNING"
+                    else:
+                        blob_icon = "🔴"
+                        blob_status_text = "CRITICAL"
+                    blob_line = f"{blob_icon} Blob Success: {blob_status['slots_with_blobs']}/{blob_status['slots_checked']} slots ({success_rate:.1f}%) - {blob_status_text}"
+                    blob_details = f"📊 Total Blobs: {blob_status['total_blobs']} | Errors: {blob_status['errors']}"
+                else:
+                    blob_line = "⚠️ Blob Check: Could not get head slot"
+            else:
+                beacon_line = "ℹ️ Beacon RPC: Not provided"
+            message_parts = [
+            "🔍 RPC Health Check Results",
+            "",
+            exec_line,
+            beacon_line
+            ]
+            if blob_line:
+                message_parts.extend(["", blob_line])
+            if blob_details:
+                message_parts.append(blob_details)
+            message_parts.extend([
+        "",
+        "📋 Status Guide:",
+        "• 🟢 HEALTHY: ≥75% blob success",
+        "• 🟡 WARNING: 25%-75% blob success", 
+        "• 🔴 CRITICAL: <25% blob success"
+    ])
+        return "\n".join(message_parts)                                            
+
+
     async def check_miss_rate_alert(self) -> Optional[Dict[str, Any]]:
         """Kiểm tra miss rate và gửi cảnh báo nếu cần"""
         try:
@@ -116,26 +278,26 @@ class AztecMonitor:
             validator_index = validator_data.get("index", "Unknown")
             validator_address = validator_data.get("address", "Unknown")
             
-            alert_message = f"""🚨 **VALIDATOR ALERT** 🚨
+            alert_message = f"""🚨 VALIDATOR ALERT 🚨
 
-❌ **High Miss Rate Detected!**
+❌ High Miss Rate Detected!
 
-📊 **Miss Rate:** {miss_rate:.1f}% (> 30%)
-🎯 **Validator Index:** {validator_index}
-🔗 **Address:** {validator_address[:10]}...{validator_address[-8:]}
+📊 Miss Rate: {miss_rate:.1f}% (> 30%)
+🎯 Validator Index: {validator_index}
+🔗 Address: {validator_address[:10]}...{validator_address[-8:]}
 
-📈 **Attestation Stats:**
+📈 Attestation Stats:
 • Total: {total_attestations}
 • Missed: {missed_attestations}
 • Success: {total_attestations - missed_attestations}
 
-⚠️ **Action Required:**
+⚠️ Action Required:
 • Check node connectivity
 • Verify synchronization status
 • Review system resources
 • Check network latency
 
-⏰ **Time:** {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}"""
+⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}"""
 
             # Gửi qua tất cả authorized users
             success_count = 0
@@ -322,11 +484,11 @@ class AztecMonitor:
             with open("aztec_monitor_bot.py", "w") as f:
                 f.write(new_content)
             logger.info(f"File updated from v{self.current_version} to v{new_version}")
-            reset_success, reset_output = await self.run_command("sudo systemctl reset-failed aztecrp.service")
+            reset_success, reset_output = await self.run_command("systemctl reset-failed aztecrp.service")
             if reset_success:
                 logger.info("Failed status reset successfully")
             await asyncio.sleep(2)
-            success, output = await self.run_command("sudo systemctl restart aztecrp.service")
+            success, output = await self.run_command("systemctl restart aztecrp.service")
             if success:
                 logger.info("Service restarted successfully after update")
                 return True
@@ -1252,12 +1414,12 @@ async def start_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     monitor.start_monitoring(interval)
     
-    text = f"""✅ **Monitoring Started**
+    text = f"""✅ Monitoring Started
 
-🔍 **Miss Rate Alert:** > 30%
-⏱️ **Check Interval:** {interval} seconds ({interval//60} minutes)
-🔕 **Alert Cooldown:** 30 minutes
-📱 **Notification:** Telegram
+🔍 Miss Rate Alert: > 30%
+⏱️ Check Interval: {interval} seconds ({interval//60} minutes)
+🔕 Alert Cooldown: 30 minutes
+📱 Notification: Telegram
 
 The bot will now automatically monitor your validator's miss rate and send alerts when it exceeds 30%."""
     
@@ -1273,7 +1435,7 @@ async def stop_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     monitor.stop_monitoring()
     
-    text = "🛑 **Monitoring Stopped**\n\nAutomatic miss rate monitoring has been disabled."
+    text = "🛑 Monitoring Stopped\n\nAutomatic miss rate monitoring has been disabled."
     escaped_text = escape_markdown_v2(text)
     await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
 
@@ -1286,14 +1448,14 @@ async def monitor_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     status = "🟢 Active" if monitor.monitoring_active else "🔴 Inactive"
     
-    text = f"""📊 **Monitoring Status**
+    text = f"""📊 Monitoring Status
 
-🔍 **Status:** {status}
-⚠️ **Alert Threshold:** > 30% miss rate
-🔕 **Cooldown:** 30 minutes
-📱 **Notifications:** Telegram
+🔍 Status: {status}
+⚠️ Alert Threshold: > 30% miss rate
+🔕 Cooldown: 30 minutes
+📱 Notifications: Telegram
 
-**Commands:**
+Commands:
 • `/start_monitor [interval]` - Start monitoring
 • `/stop_monitor` - Stop monitoring
 • `/monitor_status` - Check status"""
@@ -1302,7 +1464,7 @@ async def monitor_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(escaped_text, parse_mode="MarkdownV2")
 async def handle_port_check_menu(query) -> None:
     """Handle port check menu"""
-    text = """🔍 **Port Check Tool**
+    text = """🔍 Port Check Tool
     Enter port number to check if it's open on your public IP address.
 
 Common ports:
@@ -1323,6 +1485,7 @@ Please enter a port number (1-65535):"""
         ]),
         parse_mode="MarkdownV2"
     )
+    context.user_data["port_check_state"] = True
 async def handle_port_check_custom(update: Update, context:ContextTypes.DEFAULT_TYPE) -> None:
     """Handle custom port check input"""
     query = update.callback_query
@@ -1330,7 +1493,7 @@ async def handle_port_check_custom(update: Update, context:ContextTypes.DEFAULT_
     if not monitor.check_authorization(user_id):
         await query.answer("❌ Unauthorized access!")
         return
-    text = """🔍 **Custom Port Check**
+    text = """🔍 Custom Port Check
     Enter the details in format:
 `port` or `ip:port`
 
@@ -1351,7 +1514,39 @@ Please enter port or ip:port:"""
     context.user_data["awaiting_port_check"] = True
         
 
+async def handle_rpc_check_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user_id = query.from_user.id
+    if not monitor.check_authorization(user_id):
+        await query.answer("❌ Unauthorized access!")
+        return
+    text = """🔍 RPC Health Check
 
+Enter RPC details in one of these formats:
+
+Single RPC:
+`http://127.0.0.1:8545`
+`http://your-ip:8545`
+
+RPC + Beacon:
+`http://127.0.0.1:8545,http://127.0.0.1:3500`
+`http://your-ip:8545,http://your-ip:3500`
+
+Examples:
+• `http://127.0.0.1:8545` - Local execution only
+• `http://192.168.1.100:8545,http://192.168.1.100:3500` - Both RPC & Beacon
+• `https://eth-sepolia.g.alchemy.com/v2/your-key` - Remote RPC
+
+Please enter your RPC URL(s):"""
+    escaped_text = escape_markdown_v2(text)
+    await query.edit_message_text(
+        escaped_text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+        ]),
+        parse_mode="MarkdownV2"
+    )
+    context.user_data["awaiting_rpc_check"] = True    
 
 async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1385,6 +1580,40 @@ async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f"⏳ Syncing...\n\n🧱 Local: {local}\n🌐 Remote: {remote}\n📈 Progress: {percent}"
 
         await update.message.reply_text( escape_markdown_v2(text), parse_mode="MarkdownV2")
+    elif context.user_data.get("awaiting_rpc_check"):
+        input_text = update.message.text.strip()
+        context.user_data["awaiting_rpc_check"] = False
+        try:
+            if "," in input_text:
+                parts = input_text.split(",", 1)
+                exec_rpc = parts[0].strip()
+                beacon_rpc = parts[1].strip()
+            else:
+                exec_rpc = input_text.strip()
+                beacon_rpc = None
+            if not (exec_rpc.startswith("http://") or exec_rpc.startswith("https://")):
+                await update.message.reply_text("❌ Execution RPC must start with http:// or https://")
+                return
+            if beacon_rpc and not (beacon_rpc.startswith("http://") or beacon_rpc.startswith("https://")):
+                await update.message.reply_text("❌ Beacon RPC must start with http:// or https://")
+                return
+            checking_msg = f"🔍 Checking RPC health...\n\n⏳ Testing execution RPC: {exec_rpc}"
+            if beacon_rpc:
+                checking_msg += f"\n⏳ Testing beacon RPC: {beacon_rpc}"
+            checking_msg += "\n\nPlease wait..."
+            await update.message.reply_text(checking_msg)
+            result = await monitor.check_rpc_health(exec_rpc, beacon_rpc)
+            if result["success"]:
+                text = result["message"]
+            else:
+                text = f"❌ RPC Health Check Failed\n\n{result['message']}"
+            escaped_text = escape_markdown_v2(text)
+            await update.message.reply_text(
+                escaped_text,
+                parse_mode="MarkdownV2"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error processing RPC check: {str(e)}")
     elif context.user_data.get("awaiting_port_check"):
         input_text = update.message.text.strip()
         context.user_data["awaiting_port_check"] = False
@@ -1409,40 +1638,40 @@ async def handle_user_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if result["success"]:
                 status_icon = "🟢" if result["is_open"] else "🔴"
                 status_text = "OPEN" if result["is_open"] else "CLOSED"
-                text = f"""🔍 **Port Check Result**
+                text = f"""🔍 Port Check Result
 
-{status_icon} **Status:** {status_text}
-🌐 **IP Address:** {result['ip_address']}
-🔌 **Port:** {result['port']}
+{status_icon} Status: {status_text}
+🌐 IP Address: {result['ip_address']}
+🔌 Port: {result['port']}
 
 {result['message']}"""
                 if result["is_open"]:
                     text += f"""
 
-✅ **Port {port} is accessible from the internet**
+✅ Port {port} is accessible from the internet
 • Services can accept incoming connections
 • Port forwarding is working correctly
 • No firewall blocking this port"""
                 else:
                     text += f"""
 
-❌ **Port {port} is not accessible from the internet**
+❌ Port {port} is not accessible from the internet
 
-**Possible causes:**
+Possible causes:
 • Port is not open/listening
 • Firewall blocking the port
 • Router not forwarding the port
 • Service not running on this port
 
-**To fix:**
+To fix:
 • Check if service is running
 • Configure port forwarding on router
 • Allow port through firewall"""
 
             else:
-                text = f"""🔍 **Port Check Result**
+                text = f"""🔍 Port Check Result
 
-❌ **Error checking port {port}**
+❌ Error checking port {port}
 
 {result['message']}"""
             escaped_text = escape_markdown_v2(text)
@@ -1462,7 +1691,7 @@ async def handle_sync_status_custom(update: Update, context: ContextTypes.DEFAUL
     if not monitor.check_authorization(user_id):
         await query.answer("❌ Unauthorized access!", show_alert=True)
         return
-    text = "📥 Please enter the *port number* your Aztec RPC is running on (e.g. 8080, 9000):"
+    text = "📥 Please enter the port number your Aztec RPC is running on (e.g. 8080, 9000):"
     escaped_text = escape_markdown_v2(text)    
     await query.edit_message_text(escaped_text, parse_mode="MarkdownV2")
     context.user_data["awaiting_port"] = True        
@@ -1498,7 +1727,6 @@ Please wait..."""
             await query.edit_message_text(plain_text, reply_markup=back_button)
 async def handle_peer_status(query) -> None:
     """Handle peer status check"""
-    # Show loading message với progress indication
     loading_msg = """🔍 Checking peer status...
 
 ⏳ Getting local peer ID...
@@ -1515,11 +1743,11 @@ Please wait..."""
     # Format message
     if status["success"]:
         if status["peer_found"]:
-            text = f"🌐 **Aztec Peer Status**\n\n{status['message']}"
+            text = f"🌐 Aztec Peer Status\n\n{status['message']}"
         else:
-            text = f"🌐 **Aztec Peer Status**\n\n{status['message']}"
+            text = f"🌐 Aztec Peer Status\n\n{status['message']}"
     else:
-        text = f"🌐 **Aztec Peer Status**\n\n{status['message']}"
+        text = f"🌐 Aztec Peer Status\n\n{status['message']}"
 
     # Create back button
     back_button = InlineKeyboardMarkup(
@@ -1559,7 +1787,7 @@ def create_main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🔍 Port Check", callback_data="port_check"),
             ],
             [
-                InlineKeyboardButton("🔧 Check RPC", callback_data="service_menu"),
+                InlineKeyboardButton("🔗 RPC Health", callback_data="rpc_check"),
                 InlineKeyboardButton("📝 View Logs", callback_data="logs_menu"),
             ],
             [   
@@ -1682,7 +1910,7 @@ async def button_handler(
 
     if query.data == "main_menu":
         await query.edit_message_text(
-            "🏠 **Main Menu**\n\nSelect an option:",
+            "🏠 Main Menu\n\nSelect an option:",
             reply_markup=create_main_menu(),
             parse_mode="MarkdownV2",
         )
@@ -1695,7 +1923,9 @@ async def button_handler(
     elif query.data == "peer_status":
         await handle_peer_status(query)
     elif query.data == "port_check":
-        await handle_port_check_custom(update, context)    
+        await handle_port_check_custom(update, context)
+    elif query.data == "rpc_check":
+        await handle_rpc_check_custom(update, context)        
     elif query.data == "sync_custom":
         await handle_sync_status_custom(update, context)      
     elif query.data == "logs_menu":
@@ -1715,13 +1945,13 @@ async def button_handler(
         )
     elif query.data == "components_menu":
         await query.edit_message_text(
-            "🔧 **Component Filter**\n\n" "Filter logs by specific components:",
+            "🔧 Component Filter\n\n" "Filter logs by specific components:",
             reply_markup=create_components_menu(),
             parse_mode="MarkdownV2",
         )
     elif query.data == "service_menu":
         await query.edit_message_text(
-            "🔧 **Service Management**\n\nSelect action:",
+            "🔧 Service Management\n\nSelect action:",
             reply_markup=create_service_menu(),
             parse_mode="MarkdownV2",
         )
@@ -2033,11 +2263,11 @@ async def update_aztec_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_ver = result["current_version"]
             remote_ver = result["remote_version"]
             
-            update_msg = f"""🔄 **Update Available!**
+            update_msg = f"""🔄 Update Available!
 
-📦 **Current Version:** {current_ver}
-🆕 **New Version:** {remote_ver}
-🔄 **Updating...**
+📦 Current Version: {current_ver}
+🆕 New Version: {remote_ver}
+🔄 Updating...
 
 Please wait while the bot updates and restarts..."""
             
@@ -2045,7 +2275,7 @@ Please wait while the bot updates and restarts..."""
             
             success = await monitor.apply_update(result["remote_content"], remote_ver)
             if success:
-                final_msg = f"✅ **Update Successful!**\n\nUpdated from v{current_ver} to v{remote_ver}\nBot restarted with new version."
+                final_msg = f"✅ Update Successful!\n\nUpdated from v{current_ver} to v{remote_ver}\nBot restarted with new version."
                 await update.message.reply_text(escape_markdown_v2(final_msg), parse_mode="MarkdownV2")
             else:
                 await update.message.reply_text("❌ Update failed. Check logs for details.")
@@ -2054,7 +2284,7 @@ Please wait while the bot updates and restarts..."""
         else:
             current_ver = result["current_version"]
             remote_ver = result["remote_version"]
-            msg = f"✅ **Already Up to Date**\n\nCurrent version: {current_ver}\nRemote version: {remote_ver}"
+            msg = f"✅ Already Up to Date\n\nCurrent version: {current_ver}\nRemote version: {remote_ver}"
             await update.message.reply_text(escape_markdown_v2(msg), parse_mode="MarkdownV2")
             
     except Exception as e:
@@ -2082,15 +2312,15 @@ async def version_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif not remote_version:
             status = "🔴 Cannot check remote"
         
-        version_text = f"""📦 **Version Information**
+        version_text = f"""📦 Version Information
 
-🏷️ **Current Version:** {__version__}
-🌐 **Remote Version:** {remote_version or 'Unknown'}
-📊 **Status:** {status}
+🏷️ Current Version: {__version__}
+🌐 Remote Version: {remote_version or 'Unknown'}
+📊 Status: {status}
 
-⏰ **Last Check:** {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+⏰ Last Check: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
 
-**Commands:**
+Commands:
 • `/version` - Check version info
 • `/update_aztec` - Update if available"""
         
