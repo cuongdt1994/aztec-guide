@@ -19,6 +19,7 @@ import shlex
 import aiohttp
 import shutil
 import sys
+import psutil
 from typing import Dict, Any
 from packaging.version import parse as parse_version
 
