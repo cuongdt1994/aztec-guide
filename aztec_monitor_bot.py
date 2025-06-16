@@ -795,47 +795,40 @@ Common solutions:
 
 
     async def check_bot_update(self) -> Dict[str, Any]:
-        """Check for bot update"""
-        result = {
-        "success": False,
-        "current_version": self.bot_version,
-        "remote_version": None,
-        "update_available": False,
-        "message": ""
-        }
         try:
-            remote_version = await self.get_bot_remote_version()
+            remote_version = await self.get_remote_version()
             if not remote_version:
-                result["message"] = "❌ Cannot fetch remote bot version. Check network connection or repository URL."
-                return result
-            result["remote_version"] = remote_version
-            result["success"] = True
+                remote_version = await self.get_bot_remote_version()
+            if not remote_version:
+                return {"error": "Could not fetch remote version"}
+            logger.info(f"Current version: {self.bot_version}")
+            logger.info(f"Remote version: {remote_version}")
             current_parsed = parse_version(self.bot_version)
             remote_parsed = parse_version(remote_version)
             if remote_parsed > current_parsed:
-                result["update_available"] = True
-                result["message"] = f"""🔄 Bot Update Available!
-
-📦 Current Version: {self.bot_version}
-🆕 Latest Version: {remote_version}
-📊 Status: Update available
-
-Ready to update your monitoring bot."""
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(self.remote_file_url) as response:
+                        if response.status == 200:
+                            remote_content = await response.text()
+                            return {
+                                "update_available": True,
+                                "current_version": self.bot_version,
+                                "remote_version": remote_version,
+                                "remote_content": remote_content,
+                                "version_comparison": f"{self.bot_version} -> {remote_version}"
+                            }
+                        else:
+                            return {"error": f"Failed to fetch remote file: {response.status}"}
             else:
-                result["message"] = f"""✅ Bot Up to Date
-
-📦 Current Version: {self.bot_version}
-🌐 Latest Version: {remote_version}
-📊 Status: No update needed"""
-            return result
-        except ValueError as ve:
-            logger.error(f"Version parsing error: {ve}")
-            result["message"] = f"❌ Error comparing versions: Invalid version format ({str(ve)})"
-            return result
+                return {
+                    "update_available": False,
+                    "current_version": self.bot_version,
+                    "remote_version": remote_version,
+                    "message": "Already up to date"
+                }
         except Exception as e:
-            logger.error(f"Error checking bot update: {e}")
-            result["message"] = f"❌ Error checking bot update: {str(e)}"
-            return result
+            logger.error(f"Error checking for updates: {e}")
+            return {"error": str(e)}
 
     async def get_service_status(self) -> Dict:
         success, output = await self.run_command(
