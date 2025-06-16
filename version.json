@@ -1,5 +1,5 @@
 {
-    "version": "0.0.6",
+    "version": "0.0.7",
     "release_date": "2025-06-13",
     "changelog": [
         "🧹 Code optimization: Removed unused imports and functions",

@@ -37,7 +37,7 @@ service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 # Version information
-Version = "0.0.5"
+Version = "0.0.7"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -2717,7 +2717,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         current_version = await monitor.get_node_current_version()
         
         status_icon = "🟢" if service_status["active"] else "🔴"
-        version_text = f"v{current_version}" if current_version else "Unknown"
+        version_text = f"{current_version}" if current_version else "Unknown"
         
         welcome_text = f"""🚀 Aztec Node Monitor
 
