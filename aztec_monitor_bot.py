@@ -24,9 +24,7 @@ from packaging.version import parse as parse_version
 
 
 load_dotenv()  # Load environment variables from .env file
-# Version information
-__version__ = "0.0.5"
-# Configuration
+# Configuration variables loaded from environment
 BOT_TOKEN = os.getenv("AZTEC_BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("AZTEC_BOT_TOKEN environment variable not set. Please set it in .env or as an environment variable.")
@@ -34,136 +32,94 @@ if not BOT_TOKEN:
 AUTHORIZED_USERS = [int(uid) for uid in os.getenv("AZTEC_AUTHORIZED_USERS", "").split(",") if uid]
 if not AUTHORIZED_USERS:
     raise ValueError("AZTEC_AUTHORIZED_USERS environment variable not set or empty. Please specify at least one authorized user ID.")
-
-SERVICE_NAME = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
+logger = logging.getLogger(__name__)
+service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
-
+# Version information
+Version = "0.0.5"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
     handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
-logger = logging.getLogger(__name__)
 
 def parse_timestamp(timestamp_str: str) -> str:
     if not timestamp_str:
         return "Unknown"
     try:
         if timestamp_str.endswith("Z"):
-            dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            parsed_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
         else:
-            dt = datetime.fromisoformat(timestamp_str)
-        return dt.strftime("%d-%m-%Y - %H:%M")
-    except (ValueError, TypeError) as e:
-        logger.debug(f"Error parsing timestamp {timestamp_str}: {e}")
+            parsed_dt = datetime.fromisoformat(timestamp_str)
+        return parsed_dt.strftime("%d-%m-%Y - %H:%M")
+    except (ValueError, TypeError) as error:
+        logger.debug(f"Error parsing timestamp {timestamp_str}: {error}")
         return timestamp_str[:19] if len(timestamp_str) >= 19 else timestamp_str
 
 class AztecMonitor:
     def __init__(self):
-        self.service_name = SERVICE_NAME
         self.last_alert_time = {}
         self.alert_cooldown = 1800
         self.monitoring_active = False
         self.monitor_thread = None
-        self.bot_version = __version__
-        self.bot_remote_version_url = "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/version.json"
-        self.remote_file_url = "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
-        self.node_docker_api = "https://hub.docker.com/v2/repositories/aztecprotocol/aztec/tags"
-        self.min_node_version = "0.87.0"
         self.version_cache = {}
         self.cache_expiry = 300
         self.cache = {}
-
+        self.remote_version_url = "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/version.json"
+        self.remote_file_url = "https://raw.githubusercontent.com/cuongdt1994/aztec-guide/refs/heads/main/aztec_monitor_bot.py"
+        self.node_docker_api_url = "https://hub.docker.com/v2/repositories/aztecprotocol/aztec/tags"
+        self.minimum_node_version = "0.87.0"
+        self.bot_version = Version
     async def get_node_current_version(self) -> Optional[str]:
-        paths = [
+    
+        possible_paths = [
         "/home/ubuntu/.aztec/bin/aztec",
-        "/root/.aztec/bin/aztec", 
+        "/root/.aztec/bin/aztec",
         f"{os.path.expanduser('~')}/.aztec/bin/aztec",
         "/usr/local/bin/aztec",
-        "aztec"  # In PATH
-    ]
-        aztec_cmd = None
-        for path in paths:
+        "aztec"  # Check in PATH
+        ]
+        aztec_command = None
+    
+        for path in possible_paths:
             if path == "aztec":
                 try:
                     subprocess.run(["which", "aztec"], check=True, capture_output=True, timeout=2)
-                    aztec_cmd = "aztec"
+                    aztec_command = "aztec"
                     break
-                except:
+                except (subprocess.SubprocessError, FileNotFoundError):
                     continue
             elif os.path.isfile(path) and os.access(path, os.X_OK):
-                aztec_cmd = path
-                break    
-        if not aztec_cmd:
+                aztec_command = path
+                break
+    
+        if not aztec_command:
             return None
-        for flag in ["-V", "--version", "-v"]:
+    
+        version_flags = ["-V", "--version", "-v"]
+        for flag in version_flags:
             try:
                 result = subprocess.run(
-                [aztec_cmd, flag],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+                    [aztec_command, flag],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
                 output = result.stdout + result.stderr
-                match = re.search(r'(\d+\.\d+\.\d+)', output)
-                if match:
-                    return match.group(1)
-            except:
+                version_match = re.search(r'(\d+\.\d+\.\d+)', output)
+                if version_match:
+                    return version_match.group(1)
+            except (subprocess.SubprocessError, FileNotFoundError):
                 continue
-        return None           
-    async def fetch_available_versions(self, use_cache: bool = True) -> List[str]:
-        current_time = time.time()
-        if use_cache and 'versions' in self.version_cache:
-            cache_time = self.version_cache.get('timestamp', 0)
-            if current_time - cache_time < self.cache_expiry:
-                logger.info("Using cached versions")
-                return self.version_cache['versions']
-        try:
-            all_versions = []
-            page = 1
-            page_size = 100
-            max_pages = 50
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                while page <= max_pages:
-                    url = f"{self.node_docker_api}?page={page}&page_size={page_size}"
-                    async with session.get(url) as response:
-                        if response.status != 200:
-                            logger.error(f"Docker Hub API request failed: {response.status}")
-                            break
-                        data = await response.json()
-                        tags = data.get("results", [])
-                    
-                        if not tags:
-                            break
-                        page_versions = self._extract_valid_versions(tags)
-                        all_versions.extend(page_versions)
-                        if not data.get("next"):
-                            break
-                        page += 1
-                        if len(all_versions) >= 100:
-                            break
-            
-                all_versions.sort(key=parse_version, reverse=True)
-                self.version_cache = {
-                    'versions': all_versions,
-                    'timestamp': current_time
-                }
-                logger.info(f"Found {len(all_versions)} valid versions")
-                return all_versions
-        except Exception as e:
-            logger.error(f"Error fetching available versions: {e}")
-        if 'versions' in self.version_cache:
-            logger.info("Returning cached versions due to error")
-            return self.version_cache['versions']
-        return []
+        return None
+           
+    
 
     def _extract_valid_versions(self, tags: List[Dict]) -> List[str]:
         valid_versions = []
-        min_version_parsed = parse_version(self.min_node_version)
+        min_version_parsed = parse_version(self.minimum_node_version)
         for tag in tags:
             tag_name = tag.get("name", "")
             if any(keyword in tag_name.lower() for keyword in ['nightly', 'dev', 'beta', 'alpha', 'rc', 'latest']):
@@ -180,80 +136,94 @@ class AztecMonitor:
                      
     async def check_node_update(self) -> Dict[str, Any]:
         result = {
-            "success": False,
-            "current_version": None,
-            "latest_version": None,
-            "update_available": False,
-            "message": "",
-            "available_versions": [],
-            "newer_versions": []
+        "success": False,
+        "current_version": None,
+        "latest_version": None,
+        "update_available": False,
+        "message": "",
+        "available_versions": [],
+        "newer_versions": []
         }
         try:
             current_version = await self.get_node_current_version()
             if not current_version:
                 result["message"] = "❌ Cannot determine current node version"
                 return result
-            result["current_version"] = current_version       
-            available_versions = await self.fetch_node_versions()
+            result["current_version"] = current_version
+    
+            available_versions = await self.fetch_versions(cache_key='versions')
             if not available_versions:
                 result["message"] = "❌ Cannot fetch available versions from Docker Hub"
                 return result
+    
             result["available_versions"] = available_versions
-            result["latest_version"] = available_versions[0]
+            result["latest_version"] = available_versions[0] if available_versions else None
             current_parsed = parse_version(current_version)
-            newer_versions = []
-            for version in available_versions:
-                if parse_version(version) > current_parsed:
-                    newer_versions.append(version)
+            newer_versions = [
+                version for version in available_versions
+                if parse_version(version) > current_parsed
+            ]
             result["newer_versions"] = newer_versions
             result["success"] = True
-            
+    
             if newer_versions:
                 result["update_available"] = True
-                result["message"] = f"""🔄 Node Update Available!
-
-📦 Current Version: {current_version}
-🆕 Latest Version: {result['latest_version']}
-📊 Status: {len(newer_versions)} newer version(s) available
-
-🔝 Recent versions: {', '.join(newer_versions[:5])}{'...' if len(newer_versions) > 5 else ''}
-
-⚡ Quick update to latest: aztec-up -v {result['latest_version']}"""
+                result["message"] = self._format_update_available_message(
+                    current_version, result['latest_version'], newer_versions
+                )
             else:
-                result["message"] = f"""✅ Node Up to Date
-
-📦 Current Version: {current_version}
-🌐 Latest Version: {result['latest_version']}
-📊 Status: No update needed
-
-Your node is running the latest stable version."""
-            
-            return result            
-        except Exception as e:
-            logger.error(f"Error checking node update: {e}")
-            result["message"] = f"❌ Error checking node update: {str(e)}"
+                result["message"] = self._format_up_to_date_message(
+                    current_version, result['latest_version'] if result['latest_version'] else "Unknown"
+                )
             return result
-    async def fetch_node_versions(self) -> List[str]:
+        except Exception as error:
+            logger.error(f"Error checking node update: {error}")
+            result["message"] = f"❌ Error checking node update: {str(error)}"
+            return result
+
+    def _format_update_available_message(self, current: str, latest: str, newer: List[str]) -> str:
+        """Format message for update available scenario."""
+        return f"""🔄 Node Update Available!
+📦 Current Version: {current}
+🆕 Latest Version: {latest}
+📊 Status: {len(newer)} newer version(s) available
+🔝 Recent versions: {', '.join(newer[:5])}{'...' if len(newer) > 5 else ''}
+⚡ Quick update to latest: aztec-up -v {latest}"""
+
+    def _format_up_to_date_message(self, current: str, latest: str) -> str:
+        """Format message for up-to-date scenario."""
+        return f"""✅ Node Up to Date
+📦 Current Version: {current}
+🌐 Latest Version: {latest}
+📊 Status: No update needed
+Your node is running the latest stable version."""
+
+    async def fetch_versions(self, cache_key: str = 'versions', use_cache: bool = True) -> List[str]:
+    
         current_time = time.time()
-        if 'node_versions' in self.cache:        
-            cache_time = self.cache.get('node_versions_timestamp', 0)
+        if use_cache and cache_key in self.version_cache:
+            cache_time = self.version_cache.get('timestamp', 0)
             if current_time - cache_time < self.cache_expiry:
-                return self.cache['node_versions']
+                logger.info(f"Using cached {cache_key}")
+                return self.version_cache[cache_key]
+    
         try:
             all_versions = []
             page = 1
+            page_size = 100
             max_pages = 50
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
                 while page <= max_pages:
-                    url = f"{self.node_docker_api}?page={page}&page_size=100"
+                    url = f"{self.node_docker_api_url}?page={page}&page_size={page_size}"
                     async with session.get(url) as response:
                         if response.status != 200:
+                            logger.error(f"Docker Hub API request failed: {response.status}")
                             break
                         data = await response.json()
                         tags = data.get("results", [])
                         if not tags:
                             break
-                        page_versions = self._extract_valid_node_versions(tags)
+                        page_versions = self._extract_valid_versions(tags)
                         all_versions.extend(page_versions)
                         if not data.get("next"):
                             break
@@ -261,27 +231,33 @@ Your node is running the latest stable version."""
                         if len(all_versions) >= 100:
                             break
             all_versions.sort(key=parse_version, reverse=True)
-            self.cache['node_versions'] = all_versions
-            self.cache['node_versions_timestamp'] = current_time
+            self.version_cache[cache_key] = all_versions[:100]
+            self.version_cache['timestamp'] = current_time
+            logger.info(f"Found {len(all_versions)} valid versions for {cache_key}")
             return all_versions
-        except Exception as e:
-            logger.error(f"Error fetching node versions: {e}")
-            return self.cache.get('node_versions', [])
-    def _extract_valid_node_versions(self, tags: List[Dict]) -> List[str]:
-        valid_versions = []
-        min_version_parsed = parse_version(self.min_node_version)
-        for tag in tags:
-            tag_name = tag.get("name", "")
-            if any(keyword in tag_name.lower() for keyword in ['nightly', 'dev', 'beta', 'alpha', 'rc', 'latest']):
-                continue
-            if re.match(r'^\d+\.\d+\.\d+$', tag_name):
-                try:
-                    tag_version = parse_version(tag_name)
-                    if tag_version >= min_version_parsed:
-                        valid_versions.append(tag_name)
-                except ValueError:
-                    continue
-        return valid_versions                                   
+        except Exception as error:
+            logger.error(f"Error fetching versions for {cache_key}: {error}")
+            if cache_key in self.version_cache:
+                logger.info(f"Returning cached versions for {cache_key} due to error")
+                return self.version_cache[cache_key]
+            return []
+
+    async def send_formatted_message(self, query, text: str, reply_markup=None) -> None:
+    
+        try:
+            escaped_text = escape_markdown_v2(text)
+            await query.edit_message_text(
+            escaped_text,
+            reply_markup=reply_markup,
+            parse_mode="MarkdownV2"
+            )
+        except Exception as error:
+            logger.warning(f"Markdown parsing failed, using plain text: {error}")
+            plain_text = text.replace("*", "").replace("`", "").replace("\\", "")
+            await query.edit_message_text(
+                plain_text,
+                reply_markup=reply_markup
+            )                                   
     async def update_node_version(self, target_version: str) -> Dict[str, Any]:
         result = {
             "success": False,
@@ -296,7 +272,7 @@ Your node is running the latest stable version."""
             if not re.match(r'^\d+\.\d+\.\d+$', target_version):
                 result["message"] = f"❌ Invalid version format: {target_version}\nExpected format: x.y.z (e.g., 0.87.8)"
                 return result
-            available_versions = await self.fetch_available_versions()
+            available_versions = await self.fetch_versions(cache_key='versions', use_cache=False)
             if target_version not in available_versions:
                 result["message"] = f"""❌ Version {target_version} not found
 Available versions: {', '.join(available_versions[:10])}{'...' if len(available_versions) > 10 else ''}
@@ -318,6 +294,7 @@ Please select a valid version from the list."""
             if success:
                 await asyncio.sleep(10)
                 new_version = await self.get_node_current_version()
+                service_status = await self.get_service_status()
                 if new_version == target_version:
                     result["success"] = True
                     result["message"] = f"""✅ Node Update Successful!
@@ -325,10 +302,14 @@ Please select a valid version from the list."""
 📦 Updated: {current_version or 'Unknown'} → {target_version}
 🔄 Command: {update_command}
 ⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+📊 Service Status: {'Running' if service_status['active'] else 'Stopped'}
 
 ✨ Your Aztec node has been successfully updated to version {target_version}!
 
 🔍 Verify with: aztec -V"""
+                if not service_status['active']:
+                    logger.warning("Service is not active after update")
+                    result["message"] += "\n⚠️ Warning: Service is not running. Please restart the service."
                 else:
                     result["message"] = f"""⚠️ Update Command Completed but Version Mismatch
 
@@ -359,19 +340,23 @@ Common solutions:
             result["message"] = f"❌ Unexpected error during update: {str(e)}"
             return result
     def clear_version_cache(self):
-        """Clear version cache để force refresh"""
         self.version_cache.clear()
-        logger.info("Version cache cleared")                            
+        logger.info("Version cache cleared")
+    def update_cache(self, cache_key: str, data: Any):
+        if len(self.cache) > 50:
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[cache_key] = data                                    
     async def apply_update(self, new_content: str, new_version: str) -> bool:
         """Apply update to bot file only, without restarting external services"""
         backup_path = None
         try:
-            backup_path = f"{__file__}.backup.v{self.current_version}.{int(time.time())}"
+            backup_path = f"{__file__}.backup.v{self.bot_version}.{int(time.time())}"
             shutil.copy2(__file__, backup_path)
             logger.info(f"Created backup: {backup_path}")
             with open(__file__, "w", encoding='utf-8') as f:
                 f.write(new_content)
-            logger.info(f"Bot file updated from v{self.current_version} to v{new_version}")
+            logger.info(f"Bot file updated from v{self.bot_version} to v{new_version}")
+            self.bot_version = new_version  # Cập nhật phiên bản trong bộ nhớ
             return True
         except Exception as e:
             logger.error(f"Bot update failed: {e}")
@@ -381,7 +366,7 @@ Common solutions:
                     logger.info("Restored from backup after failed update")
             except Exception as restore_error:
                 logger.error(f"Failed to restore backup: {restore_error}")
-            return False                
+            return False         
     async def check_rpc_health(self, exec_rpc: str, beacon_rpc: str = None) -> Dict[str, Any]:
         """Check RPC and Beacon health"""
         result = {
@@ -554,39 +539,38 @@ Common solutions:
                                             
 
     async def check_miss_rate_alert(self) -> Optional[Dict[str, Any]]:
-        """Kiểm tra miss rate và gửi cảnh báo nếu cần"""
-        try:
-            # Lấy validator status
-            validator_status = await self.fetch_validator_data()
-            if not validator_status["success"] or not validator_status["validator_found"]:
-                return None
-            validator_data = validator_status["validator_data"]
-            total_success = validator_data.get("totalAttestationsSucceeded", 0)
-            total_missed = validator_data.get("totalAttestationsMissed", 0)
-            success_total = total_success + total_missed
-            if success_total == 0:
-                return None
-            miss_rate = (total_missed / success_total * 100)
-            if miss_rate > 30:
-                alert_key = "miss_rate_alert"
-                current_time = time.time()
-                # Kiểm tra cooldown
-                if (alert_key not in self.last_alert_time or 
-                    current_time - self.last_alert_time[alert_key] > self.alert_cooldown):
-                    self.last_alert_time[alert_key] = current_time
-                    
-                    return {
-                        "alert": True,
-                        "miss_rate": miss_rate,
-                        "total_attestations": success_total,
-                        "missed_attestations": total_missed,
-                        "validator_data": validator_data
-                    }
-            
-            return {"alert": False, "miss_rate": miss_rate}
-        except Exception as e:
-            logger.error(f"Error checking miss rate: {e}")
+        current_time = time.time()
+        cache_key = "validator_data"
+        if cache_key in self.cache and current_time - self.cache.get(f"{cache_key}_time", 0) < 300:  # Cache 5 phút
+            validator_status = self.cache[cache_key]
+        else:
+            validator_status = await self.fetch_validator_data(await self.get_validator_owner_address())
+            if validator_status:
+                self.update_cache(cache_key, validator_status)
+                self.cache[f"{cache_key}_time"] = current_time
+        # Tiếp tục logic kiểm tra miss rate
+        if not validator_status or not validator_status.get("success") or not validator_status.get("validator_found"):
             return None
+        validator_data = validator_status.get("validator_data", {})
+        total_success = validator_data.get("totalAttestationsSucceeded", 0)
+        total_missed = validator_data.get("totalAttestationsMissed", 0)
+        success_total = total_success + total_missed
+        if success_total == 0:
+            return None
+        miss_rate = (total_missed / success_total * 100)
+        if miss_rate > 30:
+            alert_key = "miss_rate_alert"
+            if alert_key not in self.last_alert_time or current_time - self.last_alert_time[alert_key] > self.alert_cooldown:
+                self.last_alert_time[alert_key] = current_time
+                return {
+                    "alert": True,
+                    "miss_rate": miss_rate,
+                    "total_attestations": success_total,
+                    "missed_attestations": total_missed,
+                    "validator_data": validator_data
+                }
+        return {"alert": False, "miss_rate": miss_rate}
+
     async def send_miss_rate_alert(self, alert_data: Dict[str, Any]) -> bool:
         """Gửi cảnh báo miss rate qua Telegram"""
         try:
@@ -655,11 +639,9 @@ Common solutions:
             logger.error(f"Error sending miss rate alert: {e}")
             return False
     def start_monitoring(self, check_interval: int = 300):
-        """Bắt đầu monitoring tự động (mặc định 5 phút)"""
         if self.monitoring_active:
             logger.warning("Monitoring already active")
             return
-            
         self.monitoring_active = True
         self.monitor_thread = threading.Thread(
             target=self._monitor_loop,
@@ -670,20 +652,22 @@ Common solutions:
         logger.info(f"Started automatic monitoring with {check_interval}s interval")
 
     def stop_monitoring(self):
-        """Dừng monitoring tự động"""
         self.monitoring_active = False
-        if self.monitor_thread:
+        if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=10)
+            if self.monitor_thread.is_alive():
+                logger.warning("Monitor thread did not terminate within timeout")
         logger.info("Stopped automatic monitoring")
 
+
     def _monitor_loop(self, check_interval: int):
-        """Loop monitoring chạy trong background thread"""
         import asyncio
         
         async def monitor_task():
+            error_count = 0
+            max_errors = 5
             while self.monitoring_active:
                 try:
-                    # Kiểm tra miss rate
                     alert_result = await self.check_miss_rate_alert()
                     
                     if alert_result and alert_result.get("alert"):
@@ -694,18 +678,41 @@ Common solutions:
                         else:
                             logger.error("Failed to send miss rate alert")
                     
-                    # Chờ interval tiếp theo
+                    error_count = 0  # Reset lỗi nếu thành công
                     await asyncio.sleep(check_interval)
-                    
                 except Exception as e:
-                    logger.error(f"Error in monitoring loop: {e}")
+                    error_count += 1
+                    logger.error(f"Error in monitoring loop (attempt {error_count}/{max_errors}): {e}")
+                    if error_count >= max_errors:
+                        logger.critical("Too many errors in monitoring loop, stopping monitoring")
+                        self.monitoring_active = False
+                        await self.send_critical_alert("Monitoring stopped due to repeated errors")
+                        break
                     await asyncio.sleep(60)  # Chờ 1 phút trước khi thử lại
         
-        # Chạy async task trong thread
         try:
             asyncio.run(monitor_task())
         except Exception as e:
-            logger.error(f"Monitor loop crashed: {e}")                        
+            logger.error(f"Monitor loop crashed: {e}")
+
+    async def send_critical_alert(self, message: str):
+        try:
+            alert_message = f"🚨 CRITICAL ALERT 🚨\n\n{message}\n\n⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}"
+            success_count = 0
+            for user_id in AUTHORIZED_USERS:
+                try:
+                    temp_app = Application.builder().token(BOT_TOKEN).build()
+                    await temp_app.bot.send_message(
+                        chat_id=user_id,
+                        text=alert_message
+                    )
+                    success_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to send critical alert to user {user_id}: {e}")
+            return success_count > 0
+        except Exception as e:
+            logger.error(f"Error sending critical alert: {e}")
+            return False                     
     def check_authorization(self, user_id: int) -> bool:
         """Check if user is authorized"""
         return user_id in AUTHORIZED_USERS
@@ -730,7 +737,6 @@ Common solutions:
             logger.error(f"❌ Command execution failed: {e}")
         return False, str(e)
     async def get_remote_version(self) -> Optional[str]:
-        """Get remote version with proper parsing"""
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.remote_version_url) as response:
@@ -764,38 +770,48 @@ Common solutions:
             logger.error(f"Error getting remote version: {e}")
             return None
     async def get_bot_remote_version(self) -> Optional[str]:
-        """Get remote version from code"""
+        """Get remote version from code with network check"""
         try:
-            async with aiohttp.ClientSession() as session:
+        # Kiểm tra kết nối mạng cơ bản bằng cách thử lấy IP công khai
+            if not await self.get_public_ip():
+                logger.error("No network connection detected")
+                return None
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(self.remote_file_url) as response:
                     if response.status == 200:
                         content = await response.text()
-                        version_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+                        version_match = re.search(r'Version\s*=\s*["\']([^"\']+)["\']', content)
                         if version_match:
                             return version_match.group(1)
+                    logger.error(f"Failed to fetch remote version, HTTP status: {response.status}")
                     return None
+        except aiohttp.ClientError as ce:
+            logger.error(f"Network error getting remote version: {ce}")
+            return None
         except Exception as e:
             logger.error(f"Error getting version from remote code: {e}")
             return None
 
-    async def check_bot_update(self) -> bool:
-        """Check for auto-update"""
+
+    async def check_bot_update(self) -> Dict[str, Any]:
+        """Check for bot update"""
         result = {
-            "success": False,
-            "current_version": self.bot_version,
-            "remote_version": None,
-            "update_available": False,
-            "message": ""
+        "success": False,
+        "current_version": self.bot_version,
+        "remote_version": None,
+        "update_available": False,
+        "message": ""
         }
         try:
             remote_version = await self.get_bot_remote_version()
             if not remote_version:
-                result["message"] = "❌ Cannot fetch remote bot version"
+                result["message"] = "❌ Cannot fetch remote bot version. Check network connection or repository URL."
                 return result
             result["remote_version"] = remote_version
             result["success"] = True
             current_parsed = parse_version(self.bot_version)
-            remote_parsed = parse_version(remote_version)                                 
+            remote_parsed = parse_version(remote_version)
             if remote_parsed > current_parsed:
                 result["update_available"] = True
                 result["message"] = f"""🔄 Bot Update Available!
@@ -811,53 +827,58 @@ Ready to update your monitoring bot."""
 📦 Current Version: {self.bot_version}
 🌐 Latest Version: {remote_version}
 📊 Status: No update needed"""
-            
+            return result
+        except ValueError as ve:
+            logger.error(f"Version parsing error: {ve}")
+            result["message"] = f"❌ Error comparing versions: Invalid version format ({str(ve)})"
             return result
         except Exception as e:
             logger.error(f"Error checking bot update: {e}")
             result["message"] = f"❌ Error checking bot update: {str(e)}"
-            return result    
+            return result
+
     async def get_service_status(self) -> Dict:
-        """Get service status"""
         success, output = await self.run_command(
-            f"systemctl is-active {self.service_name}"
+            f"bash -c 'systemctl is-active {service_name} && systemctl is-enabled {service_name} && systemctl status {service_name} --no-pager -l'"
         )
-        is_active = success and output == "active"
-
-        success, output = await self.run_command(
-            f"systemctl is-enabled {self.service_name}"
-        )
-        is_enabled = success and output == "enabled"
-
-        success, status_output = await self.run_command(
-            f"systemctl status {self.service_name} --no-pager -l"
-        )
+        lines = output.splitlines()
+        is_active = 'active' in lines[0] if lines else False
+        is_enabled = 'enabled' in lines[1] if len(lines) > 1 else False
+        status_output = '\n'.join(lines[2:]) if len(lines) > 2 else "Cannot get status details"
         return {
             "active": is_active,
             "enabled": is_enabled,
-            "status_output": status_output if success else "Cannot get status details",
+            "status_output": status_output
         }
-
     def get_system_resources(self) -> Dict:
-        """Get system resource usage"""
-        return {
-            "cpu": {
-                "percent": psutil.cpu_percent(interval=0.1),
-                "cores": psutil.cpu_count(),
-            },
-            "memory": {
-                "total": (mem := psutil.virtual_memory()).total,
-                "available": mem.available,
-                "percent": mem.percent,
-                "used": mem.used,
-            },
-            "disk": {
-                "total": (disk := psutil.disk_usage("/")).total,
-                "free": disk.free,
-                "used": disk.used,
-                "percent": (disk.used / disk.total) * 100,
-            },
-        }
+        current_time = time.time()
+        if 'resources_last_check' in self.cache and current_time - self.cache.get('resources_last_check_time', 0) < 10:
+            return self.cache['resources_last_check']
+        try:
+            resources = {
+                "cpu": {
+                    "percent": psutil.cpu_percent(interval=0.1),
+                    "cores": psutil.cpu_count()
+                },
+                "memory": {
+                    "percent": psutil.virtual_memory().percent,
+                    "used": psutil.virtual_memory().used,
+                    "available": psutil.virtual_memory().available,
+                    "total": psutil.virtual_memory().total
+                },
+                "disk": {
+                    "percent": psutil.disk_usage('/').percent,
+                    "used": psutil.disk_usage('/').used,
+                    "free": psutil.disk_usage('/').free,
+                    "total": psutil.disk_usage('/').total
+                }
+            }
+            self.cache['resources_last_check'] = resources
+            self.cache['resources_last_check_time'] = current_time
+            return resources
+        except Exception as e:
+            logger.error(f"Error collecting system resources: {e}")
+            return {"error": f"Cannot collect system resources: {str(e)}"}
 
     @staticmethod
     def format_bytes(bytes_value: int) -> str:
@@ -1052,13 +1073,7 @@ Ready to update your monitoring bot."""
         return parsed_info
 
 
-    async def get_aztec_logs(
-        self,
-        lines: int = LOG_LINES,
-        log_level: Optional[str] = None,
-        component: Optional[str] = None,
-    ) -> List[Dict]:
-        """Get Aztec container logs with optional filtering by log level and component"""
+    async def get_aztec_logs(self, lines: int = LOG_LINES, log_level: Optional[str] = None, component: Optional[str] = None) -> List[Dict]:
         success, output = await self.run_command(
             'docker ps --filter ancestor=aztecprotocol/aztec:latest --format "{{.ID}}"'
         )
@@ -1345,10 +1360,6 @@ Ready to update your monitoring bot."""
             logger.error(f"Error formatting peer info: {e}")
             return f"❌ Error formatting peer data: {str(e)}"
     async def get_validator_owner_address(self) -> Optional[str]:
-        """
-        Lấy validator owner address từ container logs
-        Tìm kiếm pattern: "with owner 0xA2D15ff91f1B4B9C461f92432d2541c6bbCC5c8b"
-        """
         try:
             # Lấy container ID của Aztec container
             success, output = await self.run_command(
@@ -1380,32 +1391,26 @@ Ready to update your monitoring bot."""
         except Exception as e:
             logger.error(f"Error getting owner address: {e}")
             return None
-    async def fetch_validator_data(self, validator_address: str) -> Optional[Dict[str, Any]]:
-        """Fetch validator data from Aztec network API"""
-        try:
-            url = f"https://dashtec.xyz/api/validators/{validator_address.lower()}"
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data
-                    elif response.status == 404:
-                        logger.warning(f"Validator not found: {validator_address}")
-                        return None
-                    else:    
-                        logger.error(f"API request failed with status: {response.status}")
-                        return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Network error fetching validator data: {e}")
-            return None
-        except asyncio.TimeoutError:
-            logger.error("Timeout while fetching validator data")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error fetching validator data: {e}")
-            return None
+    async def fetch_validator_data(self, validator_address: str, retries: int = 3) -> Optional[Dict[str, Any]]:
+        for attempt in range(retries):
+            try:
+                url = f"https://dashtec.xyz/api/validators/{validator_address.lower()}"
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            return await response.json()
+                        elif response.status == 404:
+                            logger.warning(f"Validator not found: {validator_address}")
+                            return None
+                        else:
+                            logger.error(f"API request failed with status: {response.status}")
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error fetching validator data (attempt {attempt+1}/{retries}): {e}")
+                if attempt == retries - 1:
+                    return None
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        return None
+
     def format_validator_info(self, validator_data: Dict[str, Any]) -> str:
         """Format validator information for display"""
         try:
@@ -1422,28 +1427,13 @@ Ready to update your monitoring bot."""
             total_epochs = validator_data.get("totalParticipatingEpochs", 0)
         
             status_icon = "🟢" if status == "Active" else "🔴" if status == "Inactive" else "🟡"
-            slashed_icon = "⚠️" if slashed else "✅"    
-        
-            recent_epoch_stats = validator_data.get("recentEpochStats", [])
-            recent_3d_success = 0
-            recent_3d_total = 0
-        
+            slashed_icon = "⚠️" if slashed else "✅"        
             success_total = total_success + total_missed
             success_rate = (total_success / success_total * 100) if success_total > 0 else 0
             miss_rate = 100 - success_rate
         
             total_blocks = total_blockmined + total_proposed + total_blockmissed
-            proposal_missrate = (total_blockmissed / total_blocks * 100) if total_blocks > 0 else 0
-        
-            for epoch_data in recent_epoch_stats:
-                epoch_number = epoch_data.get("epochNumber")
-                if epoch_number is not None and epoch_number >= current_epoch - 225:
-                    success = epoch_data.get("attestationsSuccessful", 0)
-                    missed = epoch_data.get("attestationsMissed", 0)
-                    if success > 0 or missed > 0:
-                        recent_3d_success += success
-                        recent_3d_total += (success + missed)
-        
+            proposal_missrate = (total_blockmissed / total_blocks * 100) if total_blocks > 0 else 0    
             validator_info = f"""🎯 Validator Status: {status} {status_icon}
 🏷️ Index: {index}
 💰 Balance: {balance}
@@ -1474,10 +1464,10 @@ Ready to update your monitoring bot."""
         LOCAL_RPC = f"http://localhost:{local_port}"
         REMOTE_RPC = "https://aztec-rpc.cerberusnode.com"
         payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "node_getL2Tips",
-            "params": [],
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "node_getL2Tips",
+        "params": [],
         }
         async def fetch_block_number(session, url):
             try:
@@ -1513,12 +1503,13 @@ Ready to update your monitoring bot."""
             else:
                 synced = False
             result = {
-                "synced": synced,
-                "local": local_block,
-                "remote": remote_block,
-                "message": f"Local block: {local_block}\nRemote block: {remote_block}",
+            "synced": synced,
+            "local": local_block,
+            "remote": remote_block,
+            "message": f"Local block: {local_block if local_block is not None else 'N/A'}\nRemote block: {remote_block if remote_block is not None else 'N/A'}",
             }
             return result
+
     async def check_port_open(self, port: int, ip_address: str = None) -> Dict[str, Any]:
         """
         Kiểm tra port có mở hay không sử dụng YouGetSignal API
@@ -2217,7 +2208,6 @@ Please wait..."""
         
         if result["success"]:
             text = result["message"]
-            
             if result["update_available"]:
                 buttons = [
                     [
@@ -2246,7 +2236,6 @@ Please wait..."""
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode="MarkdownV2"
         )
-        
     except Exception as e:
         error_text = f"❌ Error checking bot updates: {str(e)}"
         await query.edit_message_text(
@@ -2256,6 +2245,7 @@ Please wait..."""
             ]),
             parse_mode="MarkdownV2"
         )
+
           
 async def handle_apply_update(query, context) -> None:
     """Handle bot update application"""
@@ -2335,7 +2325,7 @@ async def handle_node_version_list(query) -> None:
     await query.edit_message_text(loading_msg, reply_markup=None)
     
     try:
-        available_versions = await monitor.fetch_available_versions(use_cache=False)
+        available_versions = await monitor.fetch_versions(cache_key='versions', use_cache=False)
         current_version = await monitor.get_node_current_version()
         
         if not available_versions:
@@ -2444,16 +2434,16 @@ def create_main_menu() -> InlineKeyboardMarkup:
     """Create optimized main menu with clear categorization"""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎯 Validator", callback_data="validator_status"),
-            InlineKeyboardButton("📊 System", callback_data="system_menu"),
+            InlineKeyboardButton("🎯 Validator Status", callback_data="validator_status"),
+            InlineKeyboardButton("📊 System Metrics", callback_data="system_menu"),
         ],
         [
-            InlineKeyboardButton("🏗️ Node", callback_data="node_management"),
-            InlineKeyboardButton("📝 Logs", callback_data="logs_menu"),
+            InlineKeyboardButton("🏗️ Node Management", callback_data="node_management"),
+            InlineKeyboardButton("📝 Log Viewer", callback_data="logs_menu"),
         ],
         [
-            InlineKeyboardButton("🔧 Tools", callback_data="tools_menu"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton("🔧 Diagnostic Tools", callback_data="tools_menu"),
+            InlineKeyboardButton("⚙️ Bot Settings", callback_data="settings_menu"),
         ]
     ])
 def create_system_menu() -> InlineKeyboardMarkup:
@@ -2467,8 +2457,7 @@ def create_system_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🌐 Peer Status", callback_data="peer_status"),
         ],
         [
-            InlineKeyboardButton("⚡ Quick Actions", callback_data="quick_actions"),
-            InlineKeyboardButton("🔙 Back", callback_data="main_menu"),
+            InlineKeyboardButton("🔙 Back", callback_data="main_menu")
         ]
     ])
 
@@ -2594,11 +2583,6 @@ def create_tools_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔍 Port Check", callback_data="port_check"),
         ],
         [
-            InlineKeyboardButton("🏗️ Node Management", callback_data="node_management"),
-            InlineKeyboardButton("📊 Monitor Control", callback_data="monitor_menu"),
-        ],
-        [
-            InlineKeyboardButton("📋 System Info", callback_data="system_menu"),
             InlineKeyboardButton("🔙 Back", callback_data="main_menu")
         ]
     ])
@@ -2630,44 +2614,95 @@ def create_logs_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("⚠️ WARN", callback_data="logs_warn"),
                 InlineKeyboardButton("❌ ERROR", callback_data="logs_error"),
             ],
-            [
-                InlineKeyboardButton("🐛 DEBUG", callback_data="logs_debug"),
-                InlineKeyboardButton("💀 FATAL", callback_data="logs_fatal"),
-            ],
-            [
-                InlineKeyboardButton("🔧 Components", callback_data="components_menu"),
-                InlineKeyboardButton("🎨 Clean View", callback_data="logs_clean"),
-            ],
             [InlineKeyboardButton("🔙 Back", callback_data="main_menu")],
         ]
     )
 
+def format_log_entry(log):
+    icons = {
+        "p2p": "🟢",
+        "archiver": "📦",
+        "world_state": "🌍",
+        "validator": "🛡️",
+        "simulator": "🧪"
+    }
+    icon = icons.get(log["component"], "📝")
+    time = log.get("timestamp", "N/A")
+    title = log.get("component", "Other").replace("_", " ").title()
+    message = log.get("message", "")
+    details = ""
+    
+    # Split main content and details if curly braces {} are present
+    if "{" in message:
+        msg_main, msg_details = message.split("{", 1)
+        details = "{" + msg_details
+        message = msg_main.strip()
+    
+    # Create formatted string with key sections, optimized for Telegram
+    text = f"{icon} {title}\n"
+    text += f"⏰ {time}\n"
+    text += f"📌 Content: {message}\n"
+    
+    # Add details if available, limit length to avoid clutter
+    if details:
+        text += f"🔍 Details: {details[:100]}...\n"
+    return text
 
-def create_components_menu() -> InlineKeyboardMarkup:
-    """Create component filtering menu"""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("✅ Validator", callback_data="comp_validator"),
-                InlineKeyboardButton("📦 Archiver", callback_data="comp_archiver"),
-            ],
-            [
-                InlineKeyboardButton("🌐 P2P Client", callback_data="comp_p2p-client"),
-                InlineKeyboardButton("⛓️ Sequencer", callback_data="comp_sequencer"),
-            ],
-            [
-                InlineKeyboardButton("🔗 Prover", callback_data="comp_prover"),
-                InlineKeyboardButton("📡 Node", callback_data="comp_node"),
-            ],
-            [
-                InlineKeyboardButton("🔄 PVX Client", callback_data="comp_pxe"),
-                InlineKeyboardButton(
-                    "🌐 World State", callback_data="comp_world_state"
-                ),
-            ],
-            [InlineKeyboardButton("🔙 Back", callback_data="logs_menu")],
-        ]
-    )
+
+async def handle_logs_enhanced(query, log_level: str = "all") -> None:
+    """
+    Handle and display logs from the Aztec system with a user-friendly interface on Telegram.
+    
+    Args:
+        query: Telegram query object to edit the message.
+        log_level (str): The log level to fetch (default is 'all').
+    """
+    loading_msg = f"📝 Fetching logs for level {log_level.upper()}...\n⏳ Please wait..."
+    await query.edit_message_text(loading_msg, reply_markup=None)
+    
+    try:
+        # Fetch logs from the Aztec system with a limited number of lines and log level
+        logs = await monitor.get_aztec_logs(lines=LOG_LINES, log_level=log_level)
+        
+        if logs and "error" in logs[0]:
+            text = f"❌ Error fetching logs: {logs[0]['error']}"
+        else:
+            # Main title with icon and log level
+            text = f"📋 Aztec Logs - {log_level.upper()}\n\n"
+            # Limit display to 10 logs to avoid overly long messages
+            for idx, log in enumerate(logs[:10], 1):
+                # Use format_log_entry to format each log with numbering
+                formatted_log = format_log_entry(log)
+                level = log.get('level', 'UNKNOWN')
+                timestamp = log.get('timestamp', 'N/A')
+                text += f"{idx}. [{timestamp}] {level}\n"
+                text += f"{formatted_log}\n\n"
+            
+            # Notify if there are additional logs not displayed
+            if len(logs) > 10:
+                text += f"📊 ... and {len(logs) - 10} more logs\n"
+        
+        # Update message with log content and control buttons
+        await query.edit_message_text(
+            escape_markdown_v2(text),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"logs_{log_level}")],
+                [InlineKeyboardButton("🔙 Back", callback_data="logs_menu")]
+            ]),
+            parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        # Handle errors and display error message
+        error_text = f"❌ Error fetching logs: {str(e)}"
+        await query.edit_message_text(
+            escape_markdown_v2(error_text),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back", callback_data="logs_menu")]
+            ]),
+            parse_mode="MarkdownV2"
+        )
+
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enhanced start command with quick overview"""
@@ -2690,14 +2725,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 📦 Version: {version_text}
 ⏰ {datetime.now().strftime('%H:%M %d/%m/%Y')}
 
-Choose an option to get started:"""
-        
+Welcome to your comprehensive node monitoring dashboard! Manage your Aztec node with ease through features like:
+- Validator status checks
+- System metrics and diagnostics
+- Node version management
+- Detailed log viewing
+- Network and peer status monitoring
+
+Special thanks to https://dashtec.xyz/ for validator data, https://aztec.nethermind.io/ for network insights, and the amazing community for their continuous support!
+
+Choose an option to get started:
+"""
+    
     except:
-        welcome_text = """🚀 Aztec Node Monitor
+        welcome_text = f"""🚀 Aztec Node Monitor
 
 Welcome to your node monitoring dashboard!
 
-Choose an option to get started:"""
+Explore powerful tools to manage your Aztec node, including validator status, system metrics, node updates, logs, and more.
+
+Special thanks to https://dashtec.xyz/ for validator data, https://aztec.nethermind.io/ for network insights, and the incredible community for their ongoing support!
+
+Choose an option to get started:
+"""
 
     # Add quick actions to main menu
     enhanced_menu = InlineKeyboardMarkup([
@@ -2872,14 +2922,9 @@ Select an option:"""
         await handle_monitor_custom(query, context)
     elif query.data == "test_alert":
         await handle_test_alert(query)
-    elif query.data == "logs_clean":
-        await handle_logs_enhanced(query, clean_view=True)
     elif query.data.startswith("logs_"):
         log_level = query.data.replace("logs_", "")
         await handle_logs_enhanced(query, log_level=log_level)
-    elif query.data.startswith("comp_"):
-        component = query.data.replace("comp_", "")
-        await handle_logs_enhanced(query, component=component)
 
 async def handle_settings_menu(query) -> None:
     """Handle settings menu display"""
@@ -2899,10 +2944,10 @@ async def handle_bot_current_version(query) -> None:
     """Handle bot current version display"""
     text = f"""📦 Bot Version Information
 
-🏷️ Current Version: {__version__}
+🏷️ Current Version: {Version}
 🐍 Python Version: {sys.version.split()[0]}
 📅 Build Date: {datetime.now().strftime('%Y-%m-%d')}
-🔧 Service: {SERVICE_NAME}
+🔧 Service: {service_name}
 
 ✅ Bot is running normally"""
     
@@ -2926,7 +2971,7 @@ Please wait..."""
     
     try:
         # Get latest version
-        available_versions = await monitor.fetch_available_versions()
+        available_versions = await monitor.fetch_versions(cache_key='versions', use_cache=False)
         if not available_versions:
             text = "❌ Cannot fetch latest version from Docker Hub"
             await query.edit_message_text(
@@ -2988,7 +3033,7 @@ async def handle_status(query) -> None:
 
 {active_icon} Active: {'Running' if status['active'] else 'Stopped'}
 {enabled_icon} Enabled: {'Yes' if status['enabled'] else 'No'}
-🏷️ Service: {SERVICE_NAME}
+🏷️ Service: {service_name}
 
 Status Details:
 {status['status_output'][:500]}"""
@@ -3066,8 +3111,8 @@ async def handle_bot_stats(query) -> None:
 ⏰ Uptime: {uptime_str}
 🔍 Monitor Status: {'🟢 Active' if monitor.monitoring_active else '🔴 Inactive'}
 👥 Authorized Users: {len(AUTHORIZED_USERS)}
-📦 Version: {__version__}
-🐳 Service: {SERVICE_NAME}
+📦 Version: {Version}
+🐳 Service: {service_name}
 📝 Log Lines: {LOG_LINES}
 
 🎯 Monitoring Features:
@@ -3161,16 +3206,17 @@ async def handle_set_interval(query, interval: int) -> None:
         
         interval_text = f"{interval//60} minutes" if interval >= 60 else f"{interval} seconds"
         
-        text = f"""✅ Monitoring Interval Updated
+        text = f"""✅ Monitoring Interval Set
 
-⏱️ New Interval: {interval_text}
+⏱️ Check Interval: {interval_text}
 🔍 Miss Rate Alert: > 30%
 🔕 Alert Cooldown: 30 minutes
 
-Monitoring has been restarted with the new interval."""
+Your monitoring interval has been applied successfully."""
         
+        escaped_text = escape_markdown_v2(text)
         await query.edit_message_text(
-            escape_markdown_v2(text),
+            escaped_text,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data="bot_settings")]
             ]),
@@ -3179,11 +3225,13 @@ Monitoring has been restarted with the new interval."""
     except Exception as e:
         error_text = f"❌ Error setting interval: {str(e)}"
         await query.edit_message_text(
-            error_text,
+            escape_markdown_v2(error_text),
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔙 Back", callback_data="bot_settings")]
-            ])
+            ]),
+            parse_mode="MarkdownV2"
         )
+
 
 
 async def handle_set_interval(query, interval: int) -> None:
@@ -3268,7 +3316,7 @@ async def handle_version_info(query) -> None:
         remote_version = await monitor.get_remote_version()
         if not remote_version:
             remote_version = await monitor.get_bot_remote_version()
-        current_parsed = parse_version(__version__)
+        current_parsed = parse_version(Version)
         remote_parsed = parse_version(remote_version) if remote_version else None
         status = "🟢 Up to date"
         update_available = False
@@ -3278,7 +3326,7 @@ async def handle_version_info(query) -> None:
         elif not remote_version:
             status = "🔴 Cannot check remote"
         version_text = f"""📦 Version Information
-        🏷️ Current Version: {__version__}
+        🏷️ Current Version: {Version}
 🌐 Remote Version: {remote_version or 'Unknown'}
 📊 Status: {status}
 
@@ -3738,15 +3786,12 @@ def escape_markdown_v2(text: str) -> str:
 
 async def handle_logs_menu(
         query,
-        log_level: str = None,
-        component: str = None,
-        clean_view: bool = False) -> None:
-    """Enhanced log handler with component filtering and clean view option"""
-    # Get logs from Aztec container, filter by level and component
+        log_level: str = None) -> None:
+    """Enhanced log handler with level filtering"""
+    # Get logs from Aztec container, filter by level
     logs = await monitor.get_aztec_logs(
         lines=LOG_LINES,
         log_level=None if log_level == "all" else log_level,
-        component=component,
     )
 
     if not logs or ("error" in logs[0]):
@@ -3762,15 +3807,10 @@ async def handle_logs_menu(
         total_length = 0
 
         # Add summary info
-        component_counts = {}
         level_counts = {}
         ansi_count = 0
 
         for log in logs:
-            # Count components
-            comp = log.get("component", "unknown")
-            component_counts[comp] = component_counts.get(comp, 0) + 1
-
             # Count levels
             level = log.get("level", "UNKNOWN")
             level_counts[level] = level_counts.get(level, 0) + 1
@@ -3781,17 +3821,7 @@ async def handle_logs_menu(
 
         # Format logs for display
         for log in logs:
-            if clean_view:
-                if log.get("timestamp"):
-                    line = f"[{log['timestamp']}] {log['level']}: {log['component']} {log['message']}"
-                else:
-                    line = f"{
-                        log['level']}: {
-                        log['component']} {
-                        log['message']}"
-            else:
-                line = log.get("clean_raw", log.get("message", ""))
-
+            line = log.get("clean_raw", log.get("message", ""))
             if len(line) > 200:
                 line = line[:197] + "..."
 
@@ -3807,18 +3837,10 @@ async def handle_logs_menu(
             level_icons = {
                 "info": "ℹ️",
                 "warn": "⚠️",
-                "error": "❌",
-                "debug": "🐛",
-                "fatal": "💀",
+                "error": "❌"
             }
             icon = level_icons.get(log_level.lower(), "📝")
             title_parts.append(f"{icon} {log_level.upper()}")
-
-        if component and component != "all":
-            title_parts.append(f"🔧 {component.upper()}")
-
-        if clean_view:
-            title_parts.append("🎨 CLEAN")
 
         if not title_parts:
             title_parts.append("📄 ALL")
@@ -3829,16 +3851,6 @@ async def handle_logs_menu(
         if ansi_count > 0:
             summary_text += f" ({ansi_count} with colors)"
 
-        # Add top components if filtering isn't active
-        if not component and len(component_counts) > 1:
-            top_components = sorted(
-                component_counts.items(), key=lambda x: x[1], reverse=True
-            )[:3]
-            comp_text = ", ".join(
-                [f"{comp}({count})" for comp, count in top_components]
-            )
-            summary_text += f"\nTop: {comp_text}"
-
         # Escape all text components
         escaped_title = escape_markdown_v2(title_text)
         escaped_summary = escape_markdown_v2(summary_text)
@@ -3846,13 +3858,10 @@ async def handle_logs_menu(
         escaped_log_text = escape_markdown_v2(log_text)
 
         # Build final text with proper formatting
-        text = f"*{escaped_title}*\n\n📊 *{escaped_summary}*\n\n```\n{escaped_log_text}\n```"
+        text = f"*{escaped_title}*\n\n📊 *{escaped_summary}*\n\n``````"
 
     # Determine which menu to return to
-    if component:
-        back_menu = create_components_menu()
-    else:
-        back_menu = create_logs_menu()
+    back_menu = create_logs_menu()
 
     try:
         await query.edit_message_text(
