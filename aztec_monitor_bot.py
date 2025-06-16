@@ -37,7 +37,7 @@ service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 # Version information
-Version = "0.0.5"
+Version = "0.0.7"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -804,11 +804,11 @@ Common solutions:
             if not remote_version:
                 remote_version = await self.get_bot_remote_version()
             if not remote_version:
-                return {"error": "Could not fetch remote version"}
+                return {
+                    "success": False,  # ✅ Thêm key success
+                    "error": "Could not fetch remote version"
+                }
                 
-            logger.info(f"Current version: {self.bot_version}")
-            logger.info(f"Remote version: {remote_version}")
-            
             current_parsed = parse_version(self.bot_version)
             remote_parsed = parse_version(remote_version)
             
@@ -818,24 +818,33 @@ Common solutions:
                         if response.status == 200:
                             remote_content = await response.text()
                             return {
+                                "success": True,  # ✅ Thêm key success
                                 "update_available": True,
                                 "current_version": self.bot_version,
                                 "remote_version": remote_version,
                                 "remote_content": remote_content,
-                                "version_comparison": f"{self.bot_version} -> {remote_version}"
+                                "message": f"🔄 Bot Update Available!\n\n📦 Current: {self.bot_version}\n🆕 Latest: {remote_version}\n\n✨ New features and improvements are ready!"
                             }
                         else:
-                            return {"error": f"Failed to fetch remote file: {response.status}"}
+                            return {
+                                "success": False,  # ✅ Thêm key success
+                                "error": f"Failed to fetch remote file: {response.status}"
+                            }
             else:
                 return {
+                    "success": True,  # ✅ Thêm key success
                     "update_available": False,
                     "current_version": self.bot_version,
                     "remote_version": remote_version,
-                    "message": "Already up to date"
+                    "message": f"✅ Bot Up to Date\n\n📦 Current Version: {self.bot_version}\n🌐 Latest Version: {remote_version}\n\n✨ You're running the latest version!"
                 }
         except Exception as e:
             logger.error(f"Error checking for updates: {e}")
-            return {"error": str(e)}
+            return {
+                "success": False,  # ✅ Thêm key success
+                "error": str(e)
+            }
+
 
     async def get_service_status(self) -> Dict:
         success, output = await self.run_command(
@@ -2193,7 +2202,6 @@ This may take several minutes. Please wait..."""
         )
 
 async def handle_bot_check_update(query) -> None:
-    """Handle bot update check"""
     loading_msg = """🔍 Checking for bot updates...
 
 ⏳ Fetching remote version...
@@ -2206,9 +2214,19 @@ Please wait..."""
     try:
         result = await monitor.check_bot_update()
         
-        if result["success"]:
-            text = result["message"]
-            if result["update_available"]:
+        # ✅ Kiểm tra key 'error' thay vì 'success'
+        if "error" in result:
+            text = f"❌ Error checking bot updates: {result['error']}"
+            buttons = [
+                [
+                    InlineKeyboardButton("🔄 Retry", callback_data="bot_check_update"),
+                    InlineKeyboardButton("🔙 Back", callback_data="settings_menu")
+                ]
+            ]
+        else:
+            # ✅ Xử lý khi không có lỗi
+            if result.get("update_available", False):
+                text = result.get("message", "Update available")
                 buttons = [
                     [
                         InlineKeyboardButton("✅ Update Now", callback_data="bot_apply_update"),
@@ -2216,20 +2234,13 @@ Please wait..."""
                     ]
                 ]
             else:
+                text = result.get("message", "Already up to date")
                 buttons = [
                     [
                         InlineKeyboardButton("🔍 Check Again", callback_data="bot_check_update"),
                         InlineKeyboardButton("🔙 Back", callback_data="settings_menu")
                     ]
                 ]
-        else:
-            text = result["message"]
-            buttons = [
-                [
-                    InlineKeyboardButton("🔄 Retry", callback_data="bot_check_update"),
-                    InlineKeyboardButton("🔙 Back", callback_data="settings_menu")
-                ]
-            ]
         
         await query.edit_message_text(
             escape_markdown_v2(text),
@@ -2245,7 +2256,6 @@ Please wait..."""
             ]),
             parse_mode="MarkdownV2"
         )
-
           
 async def handle_apply_update(query, context) -> None:
     """Handle bot update application"""
