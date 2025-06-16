@@ -3452,7 +3452,7 @@ async def handle_apply_update(query, context) -> None:
 Please wait, do not close the bot..."""
     await query.edit_message_text(updating_msg, reply_markup=None)
     try:
-        result = await monitor.check_for_updates()
+        result = await monitor.check_bot_update()
         if result.get("update_available"):
             current_ver = result["current_version"]
             remote_ver = result["remote_version"]
