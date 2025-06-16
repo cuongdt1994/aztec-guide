@@ -1,20 +1,8 @@
 {
-    "version": "0.0.7",
-    "release_date": "2025-06-13",
+    "version": "0.0.8",
+    "release_date": "2025-06-16",
     "changelog": [
-        "🧹 Code optimization: Removed unused imports and functions",
-        "🗑️ Cleaned up redundant methods (subprocess_timeout, safe_format_text, safe_edit_message, safe_markdown_format)",
-        "🔧 Removed unused variables (__version_info__, recent_immediate_rate)",
-        "🚫 Removed 'Manage Service' functionality for security",
-        "🎨 Updated welcome message with data source credits (Dashtec.xyz, Nethermind.io)",
-        "💝 Added appreciation section for users and data providers",
-        "🔄 Improved main menu layout (4 rows instead of 5)",
-        "🐛 Fixed ineffective state management in port check handler",
-        "📦 Optimized file size and performance by removing dead code",
-        "✨ Enhanced code readability and maintainability",
-        "🔒 Improved security by removing potentially risky service management features",
-        "📝 Updated documentation and user interface text"
-		"📝 Added check RPC and Beacon"
-		"🐛 Fixed Bot Restart"
+        "Fix bug for handle interval"
+		"Fix bug for RPC check"
     ]
 }

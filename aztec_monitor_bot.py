@@ -37,7 +37,7 @@ service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 # Version information
-Version = "0.0.7"
+Version = "0.0.8"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -191,12 +191,18 @@ class AztecMonitor:
 ⚡ Quick update to latest: aztec-up -v {latest}"""
 
     def _format_up_to_date_message(self, current: str, latest: str) -> str:
-        """Format message for up-to-date scenario."""
+        """Format message for up-to-date scenario"""
         return f"""✅ Node Up to Date
-📦 Current Version: {current}
-🌐 Latest Version: {latest}
-📊 Status: No update needed
-Your node is running the latest stable version."""
+
+    📦 Current Version: {current}
+    🌐 Latest Version: {latest}
+    📊 Status: No update needed
+
+    ✨ Your node is running the latest stable version!
+
+    🔍 Last checked: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+    🎯 Next check: Use 'Check Updates' to verify again"""
+
 
     async def fetch_versions(self, cache_key: str = 'versions', use_cache: bool = True) -> List[str]:
     
@@ -368,7 +374,7 @@ Common solutions:
                 logger.error(f"Failed to restore backup: {restore_error}")
             return False         
     async def check_rpc_health(self, exec_rpc: str, beacon_rpc: str = None) -> Dict[str, Any]:
-        """Check RPC and Beacon health"""
+        """Simplified RPC health check"""
         result = {
             "success": False,
             "exec_rpc": exec_rpc,
@@ -378,71 +384,92 @@ Common solutions:
             "blob_status": {"success_rate": 0, "total_blobs": 0, "errors": 0},
             "message": ""
         }
-    
+        
         try:
-            exec_payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_blockNumber",
-                "params": [],
-                "id": 1
-            }
-        
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                try:
-                    async with session.post(exec_rpc, json=exec_payload) as response:
-                        result["exec_status"]["http_code"] = response.status
-                        if response.status == 200:
-                            data = await response.json()
-                            block_hex = data.get("result")
-                            if block_hex:
-                                block_number = int(block_hex, 16)
-                                result["exec_status"]["healthy"] = True
-                                result["exec_status"]["block_number"] = block_number
-                            else:
-                                result["exec_status"]["healthy"] = False
-                        else:
-                            result["exec_status"]["healthy"] = False
-                except Exception as e:
-                    logger.error(f"Error checking Exec RPC: {e}")
-                    result["exec_status"]["healthy"] = False
-                    result["exec_status"]["http_code"] = "unreachable"
-            
+                # Check execution RPC
+                exec_healthy = await self._check_exec_rpc(session, exec_rpc, result)
+                
+                # Check beacon RPC if provided
+                beacon_healthy = True
                 if beacon_rpc:
-                    try:
-                        version_url = f"{beacon_rpc}/eth/v1/node/version"
-                        async with session.get(version_url) as response:
-                            result["beacon_status"]["http_code"] = response.status
-                            if response.status == 200:
-                                data = await response.json()
-                                version = data.get("data", {}).get("version")
-                                if version:
-                                    result["beacon_status"]["healthy"] = True
-                                    result["beacon_status"]["version"] = version
-                                
-                                    head_url = f"{beacon_rpc}/eth/v1/beacon/headers/head"
-                                    async with session.get(head_url) as head_response:
-                                        if head_response.status == 200:
-                                            head_data = await head_response.json()
-                                            head_slot = head_data.get("data", {}).get("header", {}).get("message", {}).get("slot")
-                                            if head_slot:
-                                                result["beacon_status"]["head_slot"] = int(head_slot)
-                                                await self._check_blob_sidecars(session, beacon_rpc, int(head_slot), result)
-                                            else:
-                                                result["beacon_status"]["healthy"] = False
-                                        else:
-                                            result["beacon_status"]["healthy"] = False
-                    except Exception as e:
-                        logger.error(f"Beacon RPC error: {e}")
-                        result["beacon_status"]["healthy"] = False
-                        result["beacon_status"]["http_code"] = "unreachable"
-        
-            result["message"] = self._format_rpc_health_message(result)
-            result["success"] = True
-        
+                    beacon_healthy = await self._check_beacon_rpc(session, beacon_rpc, result)
+                
+                result["success"] = True
+                result["message"] = self._format_health_message(result)
+                
+            return result
         except Exception as e:
             logger.error(f"RPC health check error: {e}")
             result["message"] = f"❌ Error checking RPC health: {str(e)}"
-        return result                                                 
+            return result
+    async def _check_beacon_rpc(self, session: aiohttp.ClientSession, beacon_rpc: str, result: Dict) -> bool:
+        """Check beacon RPC health and update result"""
+        try:
+            # Check beacon version
+            version_url = f"{beacon_rpc}/eth/v1/node/version"
+            async with session.get(version_url) as response:
+                result["beacon_status"]["http_code"] = response.status
+                
+                if response.status == 200:
+                    data = await response.json()
+                    version = data.get("data", {}).get("version")
+                    
+                    if version:
+                        result["beacon_status"]["healthy"] = True
+                        result["beacon_status"]["version"] = version
+                        
+                        # Get head slot for blob checking
+                        head_url = f"{beacon_rpc}/eth/v1/beacon/headers/head"
+                        async with session.get(head_url) as head_response:
+                            if head_response.status == 200:
+                                head_data = await head_response.json()
+                                head_slot = head_data.get("data", {}).get("header", {}).get("message", {}).get("slot")
+                                
+                                if head_slot:
+                                    result["beacon_status"]["head_slot"] = int(head_slot)
+                                    # Check blob sidecars
+                                    await self._check_blob_sidecars(session, beacon_rpc, int(head_slot), result)
+                                    return True
+                                else:
+                                    result["beacon_status"]["healthy"] = False
+                                    return False
+                            else:
+                                result["beacon_status"]["healthy"] = False
+                                return False
+                    else:
+                        result["beacon_status"]["healthy"] = False
+                        return False
+                else:
+                    result["beacon_status"]["healthy"] = False
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Error checking beacon RPC: {e}")
+            result["beacon_status"]["healthy"] = False
+            result["beacon_status"]["http_code"] = "unreachable"
+            return False
+
+    async def _check_exec_rpc(self, session: aiohttp.ClientSession, rpc_url: str, result: Dict) -> bool:
+        """Check execution RPC health"""
+        payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
+        
+        try:
+            async with session.post(rpc_url, json=payload) as response:
+                result["exec_status"]["http_code"] = response.status
+                if response.status == 200:
+                    data = await response.json()
+                    block_hex = data.get("result")
+                    if block_hex:
+                        result["exec_status"]["block_number"] = int(block_hex, 16)
+                        result["exec_status"]["healthy"] = True
+                        return True
+        except Exception as e:
+            logger.error(f"Error checking exec RPC: {e}")
+            result["exec_status"]["http_code"] = "unreachable"
+        
+        return False
+                                                
 
     async def _check_blob_sidecars(self, session, beacon_rpc: str, head_slot: int, result: Dict):
         """Check blob sidecars"""
@@ -475,27 +502,28 @@ Common solutions:
         "slots_checked": total_slots,
         "slots_with_blobs": slots_with_blobs
     }
-
-    def _format_rpc_health_message(self, result: Dict) -> str:
-        """Format RPC health message"""
+    def _format_health_message(self, result: Dict) -> str:
+        """Format comprehensive health message"""
         exec_status = result["exec_status"]
         beacon_status = result["beacon_status"]
         blob_status = result["blob_status"]
-    
+        
+        message_parts = ["🔍 RPC Health Check Results", ""]
+        
+        # Execution RPC status
         if exec_status["healthy"]:
-            exec_line = f"✅ Execution RPC: Healthy (Block: {exec_status['block_number']})"
+            message_parts.append(f"✅ Execution RPC: Healthy (Block: {exec_status['block_number']})")
         else:
             http_code = exec_status.get("http_code", "unknown")
-            exec_line = f"❌ Execution RPC: Unhealthy (HTTP: {http_code})"
-    
-        beacon_line = "ℹ️ Beacon RPC: Not provided"
-        blob_line = ""
-        blob_details = ""
-    
+            message_parts.append(f"❌ Execution RPC: Unhealthy (HTTP: {http_code})")
+        
+        # Beacon RPC status
         if result["beacon_rpc"]:
             if beacon_status["healthy"]:
                 version = beacon_status.get("version", "unknown")
-                beacon_line = f"✅ Beacon RPC: Healthy (Version: {version})"
+                message_parts.append(f"✅ Beacon RPC: Healthy (Version: {version})")
+                
+                # Add blob status if available
                 if beacon_status.get("head_slot"):
                     success_rate = blob_status["success_rate"]
                     if success_rate >= 75:
@@ -507,36 +535,28 @@ Common solutions:
                     else:
                         blob_icon = "🔴"
                         blob_status_text = "CRITICAL"
-                    blob_line = f"{blob_icon} Blob Success: {blob_status['slots_with_blobs']}/{blob_status['slots_checked']} slots ({success_rate:.1f}%) - {blob_status_text}"
-                    blob_details = f"📊 Total Blobs: {blob_status['total_blobs']} | Errors: {blob_status['errors']}"
-                else:
-                    blob_line = "⚠️ Blob Check: Could not get head slot"
+                    
+                    message_parts.extend([
+                        "",
+                        f"{blob_icon} Blob Success: {blob_status['slots_with_blobs']}/{blob_status['slots_checked']} slots ({success_rate:.1f}%) - {blob_status_text}",
+                        f"📊 Total Blobs: {blob_status['total_blobs']} | Errors: {blob_status['errors']}"
+                    ])
             else:
                 http_code = beacon_status.get("http_code", "unknown")
-                beacon_line = f"❌ Beacon RPC: Unhealthy (HTTP: {http_code})"
-    
-        message_parts = [
-            "🔍 RPC Health Check Results",
-            "",
-            exec_line,
-            beacon_line
-        ]
-    
-        if blob_line:
-            message_parts.extend(["", blob_line])
-        if blob_details:
-            message_parts.append(blob_details)
-    
+                message_parts.append(f"❌ Beacon RPC: Unhealthy (HTTP: {http_code})")
+        else:
+            message_parts.append("ℹ️ Beacon RPC: Not provided")
+        
+        # Add status guide
         message_parts.extend([
             "",
             "📋 Status Guide:",
             "• 🟢 HEALTHY: ≥75% blob success",
-            "• 🟡 WARNING: 25%-75% blob success", 
+            "• 🟡 WARNING: 25%-75% blob success",
             "• 🔴 CRITICAL: <25% blob success"
         ])
-    
+        
         return "\n".join(message_parts)
-                                            
 
     async def check_miss_rate_alert(self) -> Optional[Dict[str, Any]]:
         current_time = time.time()
@@ -736,73 +756,55 @@ Common solutions:
         except Exception as e:
             logger.error(f"❌ Command execution failed: {e}")
         return False, str(e)
-    async def get_remote_version(self) -> Optional[str]:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.remote_version_url) as response:
-                    if response.status == 200:
-                        content = await response.text()
-                        
-                        # Try JSON format first
-                        try:
-                            data = json.loads(content)
-                            if 'version' in data:
-                                return data['version']
-                        except json.JSONDecodeError:
-                            pass
-                        
-                        # Try version pattern matching
-                        patterns = [
-                            r'"?version"?\s*:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?',
-                            r'([0-9]+\.[0-9]+\.[0-9]+)',
-                            r'v([0-9]+\.[0-9]+\.[0-9]+)'
-                        ]
-                        
-                        for pattern in patterns:
-                            match = re.search(pattern, content, re.IGNORECASE)
-                            if match:
-                                return match.group(1)
-                        
-                        logger.warning(f"Could not parse version from: {content[:100]}")
-                        return None
-                    else:
-                        logger.error(f"HTTP error {response.status} when fetching remote version")
-                        return None
-        except Exception as e:
-            logger.error(f"Error getting remote version: {e}")
+    async def get_remote_version(self, source_type: str = "version_file") -> Optional[str]:
+        """Unified method for getting remote versions"""
+        urls = {
+            "version_file": self.remote_version_url,
+            "source_code": self.remote_file_url
+        }
+        
+        url = urls.get(source_type)
+        if not url:
             return None
-    async def get_bot_remote_version(self) -> Optional[str]:
-        """Get remote version from code with network check"""
-        try:
-            # Kiểm tra kết nối mạng cơ bản bằng cách thử lấy IP công khai
-            if not await self.get_public_ip():
-                logger.error("No network connection detected")
-                return None
             
+        try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                async with session.get(self.remote_file_url) as response:
+                async with session.get(url) as response:
                     if response.status == 200:
                         content = await response.text()
-                        version_match = re.search(r'Version\s*=\s*["\']([^"\']+)["\']', content)
-                        if version_match:
-                            return version_match.group(1)
-                        else:
-                            logger.warning("Version pattern not found in remote code")
-                            return None
-                    else:
-                        logger.error(f"Failed to fetch remote version, HTTP status: {response.status}")
-                        return None
-        except aiohttp.ClientError as ce:
-            logger.error(f"Network error getting remote version: {ce}")
+                        return self._extract_version_from_content(content, source_type)
             return None
         except Exception as e:
-            logger.error(f"Error getting version from remote code: {e}")
+            logger.error(f"Error getting remote version from {source_type}: {e}")
             return None
+
+    def _extract_version_from_content(self, content: str, source_type: str) -> Optional[str]:
+        """Extract version from content based on source type"""
+        if source_type == "version_file":
+            try:
+                data = json.loads(content)
+                return data.get('version')
+            except json.JSONDecodeError:
+                pass
+        
+        # Common version patterns
+        patterns = [
+            r'Version\s*=\s*["\']([^"\']+)["\']',  # For source code
+            r'"?version"?\s*:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?',  # JSON format
+            r'([0-9]+\.[0-9]+\.[0-9]+)'  # Simple version pattern
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, content, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None
     async def check_bot_update(self) -> Dict[str, Any]:
         try:
             remote_version = await self.get_remote_version()
             if not remote_version:
-                remote_version = await self.get_bot_remote_version()
+                remote_version = await self.get_remote_version("source_code")
             if not remote_version:
                 return {
                     "success": False,  # ✅ Thêm key success
@@ -986,101 +988,54 @@ Common solutions:
 
     @staticmethod
     def parse_log_line(line: str) -> Dict:
-    
-    # First, extract ANSI information
+        """Simplified log parsing with unified patterns"""
         ansi_info = AztecMonitor.extract_ansi_info(line)
         clean_line = ansi_info["clean_text"]
-
-    # Enhanced regex patterns to handle various log formats
-        patterns = [
-        # Pattern 1: [timestamp] LEVEL: message or [timestamp] LEVEL message
-        # Handles: [20:59:47.637] INFO: validator Using
-        r"^\[([^\]]+)\]\s*(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$",
-        # Pattern 2: timestamp LEVEL: message or timestamp LEVEL message
-        # Handles: 2025-06-06 19:29:21 INFO Some message
-        r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$",
-        # Pattern 3: LEVEL: message or LEVEL message (no timestamp)
-        # Handles: INFO: Some message
-        r"^(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$",
-        # Pattern 4: Find level anywhere in the line (fallback)
-        r".*(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL).*",
+        
+        # Unified regex patterns
+        log_patterns = [
+            r"^\[([^\]]+)\]\s*(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$",
+            r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$",
+            r"^(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:\s*:\s*|\s+)(.*)$"
         ]
-
-    # Try to parse the clean line
-        parsed_info = None
-        for i, pattern in enumerate(patterns):
+        
+        for i, pattern in enumerate(log_patterns):
             match = re.match(pattern, clean_line, re.IGNORECASE)
             if match:
-                groups = match.groups()
+                return AztecMonitor._create_log_entry(match.groups(), i, line, clean_line, ansi_info)
+        
+        # Fallback for unmatched lines
+        return AztecMonitor._create_default_log_entry(line, clean_line, ansi_info)
 
-                if i == 0 or i == 1:  # Patterns with timestamp, level, message
-                    if len(groups) >= 3:
-                        timestamp = groups[0]
-                        level = groups[1].upper()
-                        message = groups[2].strip() if groups[2] else ""
-
-                        parsed_info = {
-                        "timestamp": timestamp,
-                        "level": level,
-                        "message": message,
-                        "component": AztecMonitor.extract_component(message),
-                        "raw": line,
-                        "clean_raw": clean_line,
-                        "has_ansi": ansi_info["has_color"],
-                        "ansi_colors": ansi_info["colors"],
-                        "ansi_formatting": ansi_info["formatting"],
-                    }
-                        break
-
-                elif i == 2:  # Pattern with level, message (no timestamp)
-                    level = groups[0].upper()
-                    message = groups[1].strip() if len(groups) > 1 and groups[1] else ""
-
-                    parsed_info = {
-                    "timestamp": None,
-                    "level": level,
-                    "message": message,
-                    "component": AztecMonitor.extract_component(message),
-                    "raw": line,
-                    "clean_raw": clean_line,
-                    "has_ansi": ansi_info["has_color"],
-                    "ansi_colors": ansi_info["colors"],
-                    "ansi_formatting": ansi_info["formatting"],
-                }
-                    break
-
-                else:  # Pattern 4: level found anywhere (fallback)
-                    level = groups[0].upper()
-
-                    parsed_info = {
-                    "timestamp": None,
-                    "level": level,
-                    "message": clean_line.strip(),
-                    "component": AztecMonitor.extract_component(clean_line),
-                    "raw": line,
-                    "clean_raw": clean_line,
-                    "has_ansi": ansi_info["has_color"],
-                    "ansi_colors": ansi_info["colors"],
-                    "ansi_formatting": ansi_info["formatting"],
-                }
-                    break
-
-    # If no pattern matches, return as unknown level
-        if not parsed_info:
-            parsed_info = {
-                "timestamp": None,
-                "level": "UNKNOWN",
-                "message": clean_line.strip(),
-                "component": AztecMonitor.extract_component(clean_line),
-                "raw": line,
+    @staticmethod
+    def _create_log_entry(groups: tuple, pattern_index: int, raw_line: str, clean_line: str, ansi_info: dict) -> Dict:
+        """Create standardized log entry"""
+        if pattern_index <= 1 and len(groups) >= 3:  # Has timestamp
+            return {
+                "timestamp": groups[0],
+                "level": groups[1].upper(),
+                "message": groups[2].strip(),
+                "component": AztecMonitor.extract_component(groups[2]),
+                "raw": raw_line,
                 "clean_raw": clean_line,
                 "has_ansi": ansi_info["has_color"],
                 "ansi_colors": ansi_info["colors"],
-                "ansi_formatting": ansi_info["formatting"],
+                "ansi_formatting": ansi_info["formatting"]
             }
-
-        return parsed_info
-
+        else:  # No timestamp
+            level = groups[0].upper()
+            message = groups[1].strip() if len(groups) > 1 else ""
+            return {
+                "timestamp": None,
+                "level": level,
+                "message": message,
+                "component": AztecMonitor.extract_component(message),
+                "raw": raw_line,
+                "clean_raw": clean_line,
+                "has_ansi": ansi_info["has_color"],
+                "ansi_colors": ansi_info["colors"],
+                "ansi_formatting": ansi_info["formatting"]
+            }
 
     async def get_aztec_logs(self, lines: int = LOG_LINES, log_level: Optional[str] = None, component: Optional[str] = None) -> List[Dict]:
         success, output = await self.run_command(
@@ -2257,78 +2212,6 @@ Please wait..."""
             parse_mode="MarkdownV2"
         )
           
-async def handle_apply_update(query, context) -> None:
-    """Handle bot update application"""
-    loading_msg = """🔄 Applying Bot Update
-
-⏳ Downloading latest version...
-⏳ Creating backup...
-⏳ Applying update...
-
-Please wait..."""
-    
-    await query.edit_message_text(loading_msg, reply_markup=None)
-    
-    try:
-        # Get remote version and content
-        remote_version = await monitor.get_bot_remote_version()
-        if not remote_version:
-            await query.edit_message_text(
-                "❌ Cannot fetch remote version",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back", callback_data="settings_menu")]
-                ])
-            )
-            return
-        
-        # Download remote content
-        async with aiohttp.ClientSession() as session:
-            async with session.get(monitor.remote_file_url) as response:
-                if response.status == 200:
-                    new_content = await response.text()
-                else:
-                    await query.edit_message_text(
-                        f"❌ Failed to download update (HTTP {response.status})",
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔙 Back", callback_data="settings_menu")]
-                        ])
-                    )
-                    return
-        
-        # Apply update
-        success = await monitor.apply_update(new_content, remote_version)
-        
-        if success:
-            text = f"""✅ Bot Update Successful!
-
-📦 Updated: {monitor.bot_version} → {remote_version}
-⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
-
-🔄 Bot will restart automatically to apply changes."""
-        else:
-            text = """❌ Bot Update Failed
-
-The update could not be applied. Please check logs for details."""
-        
-        await query.edit_message_text(
-            escape_markdown_v2(text),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="settings_menu")]
-            ]),
-            parse_mode="MarkdownV2"
-        )
-        
-    except Exception as e:
-        error_text = f"❌ Error applying update: {str(e)}"
-        await query.edit_message_text(
-            escape_markdown_v2(error_text),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data="settings_menu")]
-            ]),
-            parse_mode="MarkdownV2"
-        )
-
-
 async def handle_node_version_list(query) -> None:
     """Handle comprehensive version list với pagination"""
     loading_msg = "📋 Loading comprehensive version list...\n⏳ Please wait..."
@@ -2793,6 +2676,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     await query.answer()
+    
+    # Node Management handlers (giữ lại phần đầu)
     if query.data == "node_management":
         await handle_node_management_menu(query)
     elif query.data == "node_current_version":
@@ -2808,6 +2693,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data.startswith("node_update_"):
         version = query.data.replace("node_update_", "")
         await handle_node_update_execute(query, version)
+    
+    # Bot Management handlers
     elif query.data == "bot_current_version":
         await handle_bot_current_version(query)
     elif query.data == "bot_check_update":
@@ -2847,29 +2734,7 @@ Select an option:"""
             reply_markup=create_tools_menu(),
             parse_mode="MarkdownV2",
         )
-    elif query.data == "node_management":
-        text = """🏗️ *Node Management*
-
-Manage your Aztec node version and updates efficiently
-
-Features:
-• Quick update to latest version
-• Browse all available versions  
-• Smart caching for faster responses
-• Detailed update progress tracking
-
-Select an option:"""
-        await query.edit_message_text(
-            text,
-            reply_markup=create_node_management_menu(),
-            parse_mode="MarkdownV2",
-        )    
-    elif query.data == "node_quick_update":
-        await handle_node_quick_update(query)
-    elif query.data == "node_version_list":
-        await handle_node_version_list(query)
-    elif query.data == "node_clear_cache":
-        await handle_node_clear_cache(query)
+    
     elif query.data == "settings_menu":
         await handle_settings_menu(query)
     # System Status handlers
@@ -2895,26 +2760,16 @@ Select an option:"""
         await handle_port_check_menu(query, context)
     elif query.data == "rpc_check":
         await handle_rpc_check_custom(update, context)
-    elif query.data == "monitor_menu":
-        await handle_monitor_menu(query)
     
     # Settings handlers
     elif query.data == "version_info":
         await handle_version_info(query)
-    elif query.data == "apply_update":
-        await handle_apply_update(query, context)
-    elif query.data == "bot_settings":
-        await handle_bot_settings(query)
     elif query.data == "bot_stats":
         await handle_bot_stats(query)
     
     # Bot Settings sub-handlers
-    elif query.data == "toggle_monitor":
-        await handle_toggle_monitor(query)
     elif query.data == "monitor_intervals":
         await handle_monitor_intervals(query)
-    elif query.data == "notification_settings":
-        await handle_notification_settings(query)
     elif query.data == "log_settings":
         await handle_log_settings(query)
     elif query.data.startswith("interval_"):
@@ -2936,19 +2791,6 @@ Select an option:"""
         log_level = query.data.replace("logs_", "")
         await handle_logs_enhanced(query, log_level=log_level)
 
-async def handle_settings_menu(query) -> None:
-    """Handle settings menu display"""
-    text = """⚙️ *Settings & Maintenance*
-
-Configure bot settings, check for updates, and view system information
-
-Select an option:"""
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=create_settings_menu(),
-        parse_mode="MarkdownV2",
-    )
 
 async def handle_bot_current_version(query) -> None:
     """Handle bot current version display"""
@@ -2968,7 +2810,19 @@ async def handle_bot_current_version(query) -> None:
         ]),
         parse_mode="MarkdownV2"
     )
+async def handle_settings_menu(query) -> None:
+    """Handle settings menu display"""
+    text = """⚙️ *Settings & Maintenance*
 
+Configure bot settings, check for updates, and view system information
+
+Select an option:"""
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=create_settings_menu(),
+        parse_mode="MarkdownV2",
+    )
 async def handle_node_quick_update(query) -> None:
     """Handle quick update to latest version"""
     loading_msg = """🚀 Quick Update to Latest
@@ -3242,34 +3096,6 @@ Your monitoring interval has been applied successfully."""
             parse_mode="MarkdownV2"
         )
 
-
-
-async def handle_set_interval(query, interval: int) -> None:
-    """Handle setting monitor interval"""
-    if monitor.monitoring_active:
-        monitor.stop_monitoring()
-    
-    monitor.start_monitoring(interval)
-    
-    interval_text = f"{interval // 60} minute{'s' if interval > 60 else ''}"
-    
-    text = f"""✅ Interval Updated
-
-⏱️ New interval: {interval_text}
-🔍 Monitoring: 🟢 Active
-
-The monitoring system has been restarted with the new interval."""
-    
-    escaped_text = escape_markdown_v2(text)
-    
-    await query.edit_message_text(
-        escaped_text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔙 Back", callback_data="bot_settings")]
-        ]),
-        parse_mode="MarkdownV2"
-    )
-
 async def handle_notification_settings(query) -> None:
     """Handle notification settings"""
     text = """🔔 Notification Settings
@@ -3325,7 +3151,7 @@ async def handle_version_info(query) -> None:
     try:
         remote_version = await monitor.get_remote_version()
         if not remote_version:
-            remote_version = await monitor.get_bot_remote_version()
+            remote_version = await monitor.get_remote_version("source_code")
         current_parsed = parse_version(Version)
         remote_parsed = parse_version(remote_version) if remote_version else None
         status = "🟢 Up to date"
@@ -3344,7 +3170,7 @@ async def handle_version_info(query) -> None:
         buttons = []
         if update_available:
             buttons.append([
-                InlineKeyboardButton("🔄 Update Now", callback_data="apply_update"),
+                InlineKeyboardButton("🔄 Update Now", callback_data="bot_apply_update"),
                 InlineKeyboardButton("🔍 Check Again", callback_data="version_info")
             ])
         else:
