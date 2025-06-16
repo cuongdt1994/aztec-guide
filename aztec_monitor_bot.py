@@ -37,7 +37,7 @@ service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 # Version information
-Version = "0.0.7"
+Version = "0.0.5"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -742,37 +742,39 @@ Common solutions:
                 async with session.get(self.remote_version_url) as response:
                     if response.status == 200:
                         content = await response.text()
-                    
-                    # Try JSON format first
+                        
+                        # Try JSON format first
                         try:
                             data = json.loads(content)
                             if 'version' in data:
                                 return data['version']
                         except json.JSONDecodeError:
                             pass
-                    
-                    # Try version pattern matching
+                        
+                        # Try version pattern matching
                         patterns = [
                             r'"?version"?\s*:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?',
                             r'([0-9]+\.[0-9]+\.[0-9]+)',
                             r'v([0-9]+\.[0-9]+\.[0-9]+)'
                         ]
-                    
+                        
                         for pattern in patterns:
                             match = re.search(pattern, content, re.IGNORECASE)
                             if match:
                                 return match.group(1)
-                    
+                        
                         logger.warning(f"Could not parse version from: {content[:100]}")
                         return None
-                    return None
+                    else:
+                        logger.error(f"HTTP error {response.status} when fetching remote version")
+                        return None
         except Exception as e:
             logger.error(f"Error getting remote version: {e}")
             return None
     async def get_bot_remote_version(self) -> Optional[str]:
         """Get remote version from code with network check"""
         try:
-        # Kiểm tra kết nối mạng cơ bản bằng cách thử lấy IP công khai
+            # Kiểm tra kết nối mạng cơ bản bằng cách thử lấy IP công khai
             if not await self.get_public_ip():
                 logger.error("No network connection detected")
                 return None
@@ -784,16 +786,18 @@ Common solutions:
                         version_match = re.search(r'Version\s*=\s*["\']([^"\']+)["\']', content)
                         if version_match:
                             return version_match.group(1)
-                    logger.error(f"Failed to fetch remote version, HTTP status: {response.status}")
-                    return None
+                        else:
+                            logger.warning("Version pattern not found in remote code")
+                            return None
+                    else:
+                        logger.error(f"Failed to fetch remote version, HTTP status: {response.status}")
+                        return None
         except aiohttp.ClientError as ce:
             logger.error(f"Network error getting remote version: {ce}")
             return None
         except Exception as e:
             logger.error(f"Error getting version from remote code: {e}")
             return None
-
-
     async def check_bot_update(self) -> Dict[str, Any]:
         try:
             remote_version = await self.get_remote_version()
@@ -801,10 +805,13 @@ Common solutions:
                 remote_version = await self.get_bot_remote_version()
             if not remote_version:
                 return {"error": "Could not fetch remote version"}
+                
             logger.info(f"Current version: {self.bot_version}")
             logger.info(f"Remote version: {remote_version}")
+            
             current_parsed = parse_version(self.bot_version)
             remote_parsed = parse_version(remote_version)
+            
             if remote_parsed > current_parsed:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(self.remote_file_url) as response:
