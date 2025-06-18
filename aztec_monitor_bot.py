@@ -37,7 +37,7 @@ service_name = os.getenv("AZTEC_SERVICE_NAME", "aztec.service")
 LOG_LINES = int(os.getenv("AZTEC_LOG_LINES", 50))
 LOG_FILE = os.path.join(os.path.expanduser("~"), "aztec_monitor.log")
 # Version information
-Version = "0.0.8"
+Version = "0.0.9"
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -75,11 +75,7 @@ class AztecMonitor:
     async def get_node_current_version(self) -> Optional[str]:
     
         possible_paths = [
-        "/home/ubuntu/.aztec/bin/aztec",
-        "/root/.aztec/bin/aztec",
-        f"{os.path.expanduser('~')}/.aztec/bin/aztec",
-        "/usr/local/bin/aztec",
-        "aztec"  # Check in PATH
+        "/home/ubuntu/.aztec/bin/aztec"
         ]
         aztec_command = None
     
@@ -98,7 +94,7 @@ class AztecMonitor:
         if not aztec_command:
             return None
     
-        version_flags = ["-V", "--version", "-v"]
+        version_flags = ["-V"]
         for flag in version_flags:
             try:
                 result = subprocess.run(
@@ -275,15 +271,18 @@ class AztecMonitor:
         try:
             current_version = await self.get_node_current_version()
             result["old_version"] = current_version
+            
             if not re.match(r'^\d+\.\d+\.\d+$', target_version):
                 result["message"] = f"❌ Invalid version format: {target_version}\nExpected format: x.y.z (e.g., 0.87.8)"
                 return result
+            
             available_versions = await self.fetch_versions(cache_key='versions', use_cache=False)
             if target_version not in available_versions:
                 result["message"] = f"""❌ Version {target_version} not found
-Available versions: {', '.join(available_versions[:10])}{'...' if len(available_versions) > 10 else ''}
-Please select a valid version from the list."""
+    Available versions: {', '.join(available_versions[:10])}{'...' if len(available_versions) > 10 else ''}
+    Please select a valid version from the list."""
                 return result
+            
             if current_version:
                 current_parsed = parse_version(current_version)
                 target_parsed = parse_version(target_version)
@@ -293,58 +292,68 @@ Please select a valid version from the list."""
                     result["message"] = f"ℹ️ Already running version {target_version}"
                     result["success"] = True
                     return result
+            
             logger.info(f"Updating node from {current_version} to {target_version}")
-            update_command = f"aztec-up -v {target_version}"
+            update_command = f"/home/ubuntu/.aztec/bin/aztec-up -v {target_version}"
             success, output = await self.run_command(update_command)
             result["command_output"] = output
+            
             if success:
-                await asyncio.sleep(10)
+                restart_success, restart_output = await self.run_command(
+                    f"systemctl restart {service_name}"
+                )
+                await asyncio.sleep(30)
                 new_version = await self.get_node_current_version()
                 service_status = await self.get_service_status()
+                
+                # ✅ SỬA LỖI LOGIC Ở ĐÂY - Kiểm tra đúng điều kiện
                 if new_version == target_version:
                     result["success"] = True
                     result["message"] = f"""✅ Node Update Successful!
 
-📦 Updated: {current_version or 'Unknown'} → {target_version}
-🔄 Command: {update_command}
-⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
-📊 Service Status: {'Running' if service_status['active'] else 'Stopped'}
+    📦 Updated: {current_version or 'Unknown'} → {target_version}
+    🔄 Command: {update_command}
+    ⏰ Time: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+    📊 Service Status: {'Running' if service_status['active'] else 'Stopped'}
 
-✨ Your Aztec node has been successfully updated to version {target_version}!
+    ✨ Your Aztec node has been successfully updated to version {target_version}!
 
-🔍 Verify with: aztec -V"""
-                if not service_status['active']:
-                    logger.warning("Service is not active after update")
-                    result["message"] += "\n⚠️ Warning: Service is not running. Please restart the service."
+    🔍 Verify with: aztec -V"""
+                    
+                    if not service_status['active']:
+                        logger.warning("Service is not active after update")
+                        result["message"] += "\n⚠️ Warning: Service is not running. Please restart the service."
                 else:
+                    # ✅ CHỈ HIỂN THỊ VERSION MISMATCH KHI THỰC SỰ KHÁC NHAU
                     result["message"] = f"""⚠️ Update Command Completed but Version Mismatch
 
-📦 Expected: {target_version}
-📦 Current: {new_version or 'Unknown'}
-🔄 Command: {update_command}
+    📦 Expected: {target_version}
+    📦 Current: {new_version or 'Unknown'}
+    🔄 Command: {update_command}
 
-The update command ran successfully, but the version check shows a different result.
-This might be normal if the node is still starting up.
+    The update command ran successfully, but the version check shows a different result.
+    This might be normal if the node is still starting up.
 
-Wait a few minutes and check again with: aztec -V"""
+    Wait a few minutes and check again with: aztec -V"""
             else:
                 result["message"] = f"""❌ Node Update Failed
 
-🔄 Command: {update_command}
-❌ Error Output:
-{output[:500]}{'...' if len(output) > 500 else ''}
+    🔄 Command: {update_command}
+    ❌ Error Output:
+    {output[:500]}{'...' if len(output) > 500 else ''}
 
-Common solutions:
-• Check if aztec-up command is available
-• Ensure sufficient disk space
-• Verify network connectivity
-• Check if any Aztec processes are running"""
+    Common solutions:
+    • Check if aztec-up command is available
+    • Ensure sufficient disk space
+    • Verify network connectivity
+    • Check if any Aztec processes are running"""
             
             return result
         except Exception as e:
             logger.error(f"Error updating node version: {e}")
             result["message"] = f"❌ Unexpected error during update: {str(e)}"
             return result
+
     def clear_version_cache(self):
         self.version_cache.clear()
         logger.info("Version cache cleared")
@@ -1036,10 +1045,24 @@ Common solutions:
                 "ansi_colors": ansi_info["colors"],
                 "ansi_formatting": ansi_info["formatting"]
             }
+    @staticmethod
+    def _create_default_log_entry(raw_line: str, clean_line: str, ansi_info: dict) -> Dict:
+        """Create default log entry for unmatched lines"""
+        return {
+            "timestamp": None,
+            "level": "UNKNOWN",
+            "message": clean_line.strip(),
+            "component": AztecMonitor.extract_component(clean_line),
+            "raw": raw_line,
+            "clean_raw": clean_line,
+            "has_ansi": ansi_info["has_color"],
+            "ansi_colors": ansi_info["colors"],
+            "ansi_formatting": ansi_info["formatting"]
+        }
 
     async def get_aztec_logs(self, lines: int = LOG_LINES, log_level: Optional[str] = None, component: Optional[str] = None) -> List[Dict]:
         success, output = await self.run_command(
-            'docker ps --filter ancestor=aztecprotocol/aztec:latest --format "{{.ID}}"'
+        'docker ps --filter ancestor=aztecprotocol/aztec:latest --format "{{.ID}}"'
         )
 
         if not success or not output:
@@ -3505,13 +3528,20 @@ async def handle_status(query) -> None:
 
     # Hide sensitive information from status output
     def mask_sensitive(text):
-        text = re.sub(
-            r"(0x[a-fA-F0-9]{32,}|[A-Za-z0-9+/=]{32,})",
-            "[HIDDEN]",
-            text)
-        text = re.sub(r"\b(?:\d{1,3}){3}\d{1,3}\b", "[IP]", text)
-        text = re.sub(r"\b(?:\d{1,3}){3}\d{1,3}:\d+\b", "[IP:PORT]", text)
+        # Mask private keys và addresses
+        text = re.sub(r"(0x[a-fA-F0-9]{32,}|[A-Za-z0-9+/=]{32,})", "[HIDDEN]", text)
+        
+        # Mask IP addresses - pattern cải tiến
+        text = re.sub(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b", "[IP]", text)
+        
+        # Mask IP:PORT combinations
+        text = re.sub(r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+\b", "[IP:PORT]", text)
+        
+        # Mask URLs with IP
+        text = re.sub(r"http[s]?://(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)", "http://[IP]", text)
+        
         return text
+
 
     safe_status_output = mask_sensitive(status["status_output"])
     details = safe_status_output[:1000] + (

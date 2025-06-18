@@ -1,8 +1,9 @@
 {
-    "version": "0.0.8",
-    "release_date": "2025-06-16",
+    "version": "0.0.9",
+    "release_date": "2025-06-19",
     "changelog": [
-        "Fix bug for handle interval"
-		"Fix bug for RPC check"
+        "Fix bug for update node not working"
+		"Remove some path not work"
+		"Fix bug in service status, IP not hidden"
     ]
 }
