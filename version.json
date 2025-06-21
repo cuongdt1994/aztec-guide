@@ -1,9 +1,7 @@
 {
-    "version": "0.0.9",
-    "release_date": "2025-06-19",
+    "version": "0.0.10",
+    "release_date": "2025-06-21",
     "changelog": [
-        "Fix bug for update node not working"
-		"Remove some path not work"
-		"Fix bug in service status, IP not hidden"
+        "Fix path running update aztec node"
     ]
 }
