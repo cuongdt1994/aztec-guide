@@ -44,7 +44,7 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
-
+user = os.getenv("USER")
 def parse_timestamp(timestamp_str: str) -> str:
     if not timestamp_str:
         return "Unknown"
@@ -72,10 +72,23 @@ class AztecMonitor:
         self.node_docker_api_url = "https://hub.docker.com/v2/repositories/aztecprotocol/aztec/tags"
         self.minimum_node_version = "0.87.0"
         self.bot_version = Version
+    @staticmethod
+    def find_aztec_up_command():
+        possible_paths = [
+            os.path.expanduser("~/.aztec/bin/aztec-up"),
+            "/root/.aztec/bin/aztec-up"
+        ]
+
+        for path in possible_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return path
+
+        return None    
     async def get_node_current_version(self) -> Optional[str]:
     
         possible_paths = [
-        "/home/ubuntu/.aztec/bin/aztec"
+        os.path.expanduser("~/.aztec/bin/aztec"),
+        "/root/.aztec/bin/aztec"
         ]
         aztec_command = None
     
@@ -187,17 +200,16 @@ class AztecMonitor:
 ⚡ Quick update to latest: aztec-up -v {latest}"""
 
     def _format_up_to_date_message(self, current: str, latest: str) -> str:
-        """Format message for up-to-date scenario"""
         return f"""✅ Node Up to Date
 
-    📦 Current Version: {current}
-    🌐 Latest Version: {latest}
-    📊 Status: No update needed
+📦 Current Version: {current}
+🌐 Latest Version: {latest}
+📊 Status: No update needed
 
-    ✨ Your node is running the latest stable version!
+✨ Your node is running the latest stable version!
 
-    🔍 Last checked: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
-    🎯 Next check: Use 'Check Updates' to verify again"""
+🔍 Last checked: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}
+🎯 Next check: Use 'Check Updates' to verify again"""
 
 
     async def fetch_versions(self, cache_key: str = 'versions', use_cache: bool = True) -> List[str]:
@@ -294,7 +306,11 @@ class AztecMonitor:
                     return result
             
             logger.info(f"Updating node from {current_version} to {target_version}")
-            update_command = f"/home/ubuntu/.aztec/bin/aztec-up -v {target_version}"
+            aztec_up = AztecMonitor.find_aztec_up_command()
+            if aztec_up:
+                update_command = f"{aztec_up} -v {target_version}"
+            else:
+                update_command = None    
             success, output = await self.run_command(update_command)
             result["command_output"] = output
             
