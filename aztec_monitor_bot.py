@@ -1465,14 +1465,17 @@ class AztecMonitor:
     
     async def get_sync_status(self, local_port=8080) -> dict:
         LOCAL_RPC = f"http://localhost:{local_port}"
-        REMOTE_RPC = "https://aztec-rpc.cerberusnode.com"
+        REMOTE_RPC = "https://api.testnet.aztecscan.xyz/v1/temporary-api-key/l2/ui/blocks-for-table"
+        
+        # Payload for local RPC
         payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "node_getL2Tips",
-        "params": [],
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "node_getL2Tips",
+            "params": [],
         }
-        async def fetch_block_number(session, url):
+        
+        async def fetch_local_block_number(session, url):
             try:
                 async with session.post(url, json=payload, timeout=5) as resp:
                     if resp.status == 200:
@@ -1497,21 +1500,56 @@ class AztecMonitor:
             except Exception as e:
                 logger.warning(f"Unexpected error for {url}: {e}")
                 return None
+        
+        async def fetch_remote_block_number(session, url):
+            try:
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Find the highest block with blockStatus = 4
+                        highest_block = None
+                        for block in data:
+                            if block.get("blockStatus") == 4:
+                                height = int(block.get("height", 0))
+                                if highest_block is None or height > highest_block:
+                                    highest_block = height
+                        return highest_block
+                    else:
+                        logger.warning(f"HTTP {resp.status} from {url}")
+                        return None
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout when connecting to {url}")
+                return None
+            except aiohttp.ClientError as e:
+                logger.warning(f"Client error for {url}: {e}")
+                return None
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Data parsing error for {url}: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"Unexpected error for {url}: {e}")
+                return None
+        
         async with aiohttp.ClientSession() as session:
-            local_block_number = fetch_block_number(session, LOCAL_RPC)
-            remote_block_number = fetch_block_number(session, REMOTE_RPC)
-            local_block, remote_block = await asyncio.gather(local_block_number, remote_block_number)
+            local_block_task = fetch_local_block_number(session, LOCAL_RPC)
+            remote_block_task = fetch_remote_block_number(session, REMOTE_RPC)
+            
+            local_block, remote_block = await asyncio.gather(local_block_task, remote_block_task)
+            
             if local_block is not None and remote_block is not None:
                 synced = local_block == remote_block
             else:
                 synced = False
+            
             result = {
-            "synced": synced,
-            "local": local_block,
-            "remote": remote_block,
-            "message": f"Local block: {local_block if local_block is not None else 'N/A'}\nRemote block: {remote_block if remote_block is not None else 'N/A'}",
+                "synced": synced,
+                "local": local_block,
+                "remote": remote_block,
+                "message": f"Local block: {local_block if local_block is not None else 'N/A'}\nRemote block: {remote_block if remote_block is not None else 'N/A'}",
             }
+            
             return result
+
 
     async def check_port_open(self, port: int, ip_address: str = None) -> Dict[str, Any]:
         """

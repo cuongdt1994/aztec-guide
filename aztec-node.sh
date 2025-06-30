@@ -66,14 +66,14 @@ handle_existing_env() {
             source "$ENV_FILE" 2>/dev/null || true
             set +a
             
-            if [[ -n "$ETHEREUM_HOSTS" && -n "$L1_CONSENSUS_HOST_URLS" && 
-                  -n "$VALIDATOR_PRIVATE_KEY" && -n "$VALIDATOR_ADDRESS" && 
+            if [[ -n "$ETHEREUM_RPC_URL" && -n "$CONSENSUS_BEACON_URL" && 
+                  -n "$VALIDATOR_PRIVATE_KEY" && -n "$COINBASE" && 
                   -n "$P2P_IP" ]]; then
                 
                 echo -e "${CYAN}🔍 Valid configuration found:${NC}"
-                echo "   • Ethereum RPC: ${ETHEREUM_HOSTS:0:50}..."
-                echo "   • Beacon RPC: ${L1_CONSENSUS_HOST_URLS:0:50}..."
-                echo "   • Validator Address: $VALIDATOR_ADDRESS"
+                echo "   • Ethereum RPC: ${ETHEREUM_RPC_URL:0:50}..."
+                echo "   • Beacon RPC: ${CONSENSUS_BEACON_URL:0:50}..."
+                echo "   • Validator Address: $COINBASE"
                 echo "   • P2P IP: $P2P_IP"
                 
                 read -p "$(echo -e ${CYAN}🔄 Reuse existing configuration? [y/N]: ${NC})" REUSE_ENV
@@ -88,7 +88,7 @@ handle_existing_env() {
         fi
         
         # Clear variables if not reusing
-        unset ETHEREUM_HOSTS L1_CONSENSUS_HOST_URLS VALIDATOR_PRIVATE_KEY VALIDATOR_ADDRESS P2P_IP 2>/dev/null || true
+        unset ETHEREUM_RPC_URL CONSENSUS_BEACON_URL VALIDATOR_PRIVATE_KEY COINBASE P2P_IP 2>/dev/null || true
     fi
 }
 
@@ -98,19 +98,19 @@ collect_configuration() {
     
     echo -e "${CYAN}📝 Please provide the following information:${NC}"
     
-    if [ -z "$ETHEREUM_HOSTS" ]; then
-        while [ -z "$ETHEREUM_HOSTS" ]; do
-            read -p "🔗 Ethereum RPC URL (e.g., https://sepolia.infura.io/v3/YOUR_KEY): " ETHEREUM_HOSTS
-            if [ -z "$ETHEREUM_HOSTS" ]; then
+    if [ -z "$ETHEREUM_RPC_URL" ]; then
+        while [ -z "$ETHEREUM_RPC_URL" ]; do
+            read -p "🔗 Ethereum RPC URL (e.g., https://sepolia.infura.io/v3/YOUR_KEY): " ETHEREUM_RPC_URL
+            if [ -z "$ETHEREUM_RPC_URL" ]; then
                 log_warning "Ethereum RPC URL is required"
             fi
         done
     fi
     
-    if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
-        while [ -z "$L1_CONSENSUS_HOST_URLS" ]; do
-            read -p "🔗 Beacon Chain RPC URL (e.g., https://beacon-sepolia.infura.io): " L1_CONSENSUS_HOST_URLS
-            if [ -z "$L1_CONSENSUS_HOST_URLS" ]; then
+    if [ -z "$CONSENSUS_BEACON_URL" ]; then
+        while [ -z "$CONSENSUS_BEACON_URL" ]; do
+            read -p "🔗 Beacon Chain RPC URL (e.g., https://beacon-sepolia.infura.io): " CONSENSUS_BEACON_URL
+            if [ -z "$CONSENSUS_BEACON_URL" ]; then
                 log_warning "Beacon Chain RPC URL is required"
             fi
         done
@@ -127,10 +127,10 @@ collect_configuration() {
         done
     fi
     
-    if [ -z "$VALIDATOR_ADDRESS" ]; then
-        while [ -z "$VALIDATOR_ADDRESS" ]; do
-            read -p "🏦 Validator Ethereum Address (0x...): " VALIDATOR_ADDRESS
-            if [ -z "$VALIDATOR_ADDRESS" ]; then
+    if [ -z "$COINBASE" ]; then
+        while [ -z "$COINBASE" ]; do
+            read -p "🏦 Validator Ethereum Address (0x...): " COINBASE
+            if [ -z "$COINBASE" ]; then
                 log_warning "Validator address is required"
             fi
         done
@@ -169,12 +169,12 @@ collect_configuration() {
 validate_configuration() {
     local errors=0
     
-    if [[ ! "$ETHEREUM_HOSTS" =~ ^https?:// ]]; then
+    if [[ ! "$ETHEREUM_RPC_URL" =~ ^https?:// ]]; then
         log_error "Invalid Ethereum RPC URL format (must start with http:// or https://)"
         ((errors++))
     fi
     
-    if [[ ! "$L1_CONSENSUS_HOST_URLS" =~ ^https?:// ]]; then
+    if [[ ! "$CONSENSUS_BEACON_URL" =~ ^https?:// ]]; then
         log_error "Invalid Beacon RPC URL format (must start with http:// or https://)"
         ((errors++))
     fi
@@ -184,7 +184,7 @@ validate_configuration() {
         ((errors++))
     fi
     
-    if [[ ! "$VALIDATOR_ADDRESS" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+    if [[ ! "$COINBASE" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
         log_error "Invalid Ethereum address format (must be 0x followed by 40 hex characters)"
         ((errors++))
     fi
@@ -372,12 +372,12 @@ create_env_file() {
 # Generated on $(date)
 
 # Network Configuration
-ETHEREUM_HOSTS=$ETHEREUM_HOSTS
-L1_CONSENSUS_HOST_URLS=$L1_CONSENSUS_HOST_URLS
+ETHEREUM_RPC_URL=$ETHEREUM_RPC_URL
+CONSENSUS_BEACON_URL=$CONSENSUS_BEACON_URL
 
 # Validator Configuration
 VALIDATOR_PRIVATE_KEY=$VALIDATOR_PRIVATE_KEY
-VALIDATOR_ADDRESS=$VALIDATOR_ADDRESS
+COINBASE=$COINBASE
 
 # P2P Configuration
 P2P_IP=$P2P_IP
@@ -417,10 +417,10 @@ ExecStart=/root/.aztec/bin/aztec start \\
     --archiver \\
     --sequencer \\
     --network \${AZTEC_NETWORK} \\
-    --l1-rpc-urls=\${ETHEREUM_HOSTS} \\
-    --l1-consensus-host-urls=\${L1_CONSENSUS_HOST_URLS} \\
+    --l1-rpc-urls=\${ETHEREUM_RPC_URL} \\
+    --l1-consensus-host-urls=\${CONSENSUS_BEACON_URL} \\
     --sequencer.validatorPrivateKey=\${VALIDATOR_PRIVATE_KEY} \\
-    --sequencer.coinbase=\${VALIDATOR_ADDRESS} \\
+    --sequencer.coinbase=\${COINBASE} \\
     --p2p.p2pIp=\${P2P_IP}
 Restart=always
 RestartSec=30
@@ -470,10 +470,10 @@ print_manual_commands() {
     echo "export PATH=\"\$PATH:/root/.aztec/bin\""
     echo "aztec start --node --archiver --sequencer \\"
     echo "  --network alpha-testnet \\"
-    echo "  --l1-rpc-urls=\$ETHEREUM_HOSTS \\"
-    echo "  --l1-consensus-host-urls=\$L1_CONSENSUS_HOST_URLS \\"
+    echo "  --l1-rpc-urls=\$ETHEREUM_RPC_URL \\"
+    echo "  --l1-consensus-host-urls=\$CONSENSUS_BEACON_URL \\"
     echo "  --sequencer.validatorPrivateKey=\$VALIDATOR_PRIVATE_KEY \\"
-    echo "  --sequencer.coinbase=\$VALIDATOR_ADDRESS \\"
+    echo "  --sequencer.coinbase=\$COINBASE \\"
     echo "  --p2p.p2pIp=\$P2P_IP"
 }
 
@@ -484,7 +484,7 @@ print_summary() {
     echo "   • Project Path: /root/.aztec"
     echo "   • Environment File: /root/.aztec/.env"
     echo "   • Network: Alpha Testnet"
-    echo "   • Validator Address: $VALIDATOR_ADDRESS"
+    echo "   • Validator Address: $COINBASE"
     echo "   • P2P IP: $P2P_IP"
     
     echo -e "\n${CYAN}📚 Useful Resources:${NC}"
